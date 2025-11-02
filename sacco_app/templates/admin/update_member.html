@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block content %}
+<h4>Update Member</h4>
+
+{% with messages = get_flashed_messages(with_categories=true) %}
+  {% if messages %}
+    {% for category, msg in messages %}
+      <div class="alert alert-{{ category }} alert-dismissible fade show" role="alert">
+        {{ msg }}
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+      </div>
+    {% endfor %}
+  {% endif %}
+{% endwith %}
+
+<form method="POST">
+    {{ form.hidden_tag() }}
+    <div class="mb-3">
+        <label>Member No</label>
+        <input type="text" class="form-control" value="{{ member.member_no }}" readonly>
+    </div>
+    <div class="mb-3">
+        {{ form.name.label }} 
+        {{ form.name(class="form-control") }}
+    </div>
+    <div class="mb-3">
+        {{ form.email.label }} 
+        {{ form.email(class="form-control") }}
+    </div>
+    <div class="mb-3">
+        {{ form.phone.label }} 
+        {{ form.phone(class="form-control") }}
+    </div>
+    {{ form.submit(class="btn btn-success") }}
+</form>
+{% endblock %}

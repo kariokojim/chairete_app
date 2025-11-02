@@ -1,0 +1,28 @@
+{% extends 'base.html' %}
+{% block content %}
+<div class="container mt-4">
+  <h2>All Loans</h2>
+  <table class="table table-striped">
+    <thead>
+      <tr>
+        <th>Loan No</th>
+        <th>Member No</th>
+        <th>Amount</th>
+        <th>Period</th>
+        <th>Status</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for loan in loans %}
+      <tr>
+        <td>{{ loan.loan_no }}</td>
+        <td>{{ loan.member_no }}</td>
+        <td>{{ loan.loan_amount }}</td>
+        <td>{{ loan.loan_period }}</td>
+        <td>{{ loan.status }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

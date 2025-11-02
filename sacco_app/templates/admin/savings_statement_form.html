@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}Savings Statement{% endblock %}
+{% block content %}
+<div class="container mt-4">
+  <div class="card shadow-sm border-0">
+    <div class="card-header bg-primary text-white">
+      <h5 class="mb-0">📄 Member Savings Statement</h5>
+    </div>
+    <div class="card-body">
+      <form method="GET" action="{{ url_for('admin.savings_statement_pdf') }}" target="_blank">
+        <div class="row g-3">
+          <div class="col-md-4">
+            <label class="form-label">Member Number</label>
+            <input type="text" class="form-control" name="member_no" placeholder="e.g., M0001" required>
+          </div>
+          <div class="col-md-3">
+            <label class="form-label">From</label>
+            <input type="date" class="form-control" name="start_date">
+          </div>
+          <div class="col-md-3">
+            <label class="form-label">To</label>
+            <input type="date" class="form-control" name="end_date">
+          </div>
+          <div class="col-md-2 d-flex align-items-end">
+            <button type="submit" class="btn btn-success w-100">Download PDF</button>
+          </div>
+        </div>
+      </form>
+      <small class="text-muted d-block mt-2">If no dates are selected, the statement defaults to the current year to today.</small>
+    </div>
+  </div>
+</div>
+{% endblock %}

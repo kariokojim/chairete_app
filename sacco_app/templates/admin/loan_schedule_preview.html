@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+{% block title %}Loan Schedule Preview{% endblock %}
+
+{% block content %}
+<div class="container mt-4">
+  <h3 class="mb-4 text-center">Loan Schedule Preview</h3>
+
+  <div class="card mb-3">
+    <div class="card-body">
+      <p><strong>Member No:</strong> {{ member_no }}</p>
+      <p><strong>Loan Amount:</strong> Ksh {{ loan_amount }}</p>
+      <p><strong>Loan Period:</strong> {{ loan_period }} months</p>
+      <p><strong>Interest Rate:</strong> {{ annual_rate }}%</p>
+      <p><strong>Monthly Installment (Approx):</strong> Ksh {{ emi }}</p>
+    </div>
+  </div>
+
+  <table class="table table-bordered table-striped table-hover">
+    <thead class="table-dark">
+      <tr>
+        <th>#</th>
+        <th>Due Date</th>
+        <th>Principal</th>
+        <th>Interest</th>
+        <th>Total Payment</th>
+        <th>Balance After</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in schedule %}
+      <tr>
+        <td>{{ row.installment_no }}</td>
+        <td>{{ row.due_date }}</td>
+        <td>{{ row.principal_due }}</td>
+        <td>{{ row.interest_due }}</td>
+        <td>{{ row.total_due }}</td>
+        <td>{{ row.balance_after }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+<form action="{{ url_for('admin.download_loan_schedule_pdf') }}" method="post" target="_blank">
+  <input type="hidden" name="member_no" value="{{ member_no }}">
+  <input type="hidden" name="loan_amount" value="{{ loan_amount }}">
+  <input type="hidden" name="loan_period" value="{{ loan_period }}">
+  <input type="hidden" name="interest_rate" value="{{ annual_rate }}">
+  <button type="submit" class="btn btn-outline-primary mt-3">
+    <i class="bi bi-file-earmark-pdf"></i> Download as PDF
+  </button>
+</form>
+
+  <div class="alert alert-info mt-3">
+    <strong>Total Interest:</strong> Ksh {{ total_interest }}<br>
+    <strong>Total Payment:</strong> Ksh {{ total_payment }}
+  </div>
+
+  <div class="text-center mt-4">
+    <a href="{{ url_for('admin.disburse_loan') }}" class="btn btn-secondary">← Back</a>
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>{{ title or "SACCO Admin" }}</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link href="{{ url_for('static', filename='css/admin.css') }}" rel="stylesheet">
+  <style>
+    /* Inline fallback if admin.css not loaded */
+    #sidebar {
+      width: 250px;
+      transition: margin-left 0.3s ease;
+    }
+    #sidebar.collapsed {
+      margin-left: -250px;
+    }
+    #content-wrapper {
+      transition: margin-left 0.3s ease;
+      width: 100%;
+    }
+  </style>
+</head>
+
+<body>
+  <!-- Top Navbar -->
+  <nav class="navbar navbar-expand-lg navbar-dark bg-primary shadow-sm sticky-top">
+    <div class="container-fluid">
+      <!-- Toggle button -->
+      <button class="btn btn-outline-light me-3" id="toggleSidebar">
+        <span class="navbar-toggler-icon"></span>
+      </button>
+
+      <a class="navbar-brand fw-bold" href="{{ url_for('admin.dashboard') }}">💠 PCEA CHAIRETE SACCO ADMIN PORTAL</a>
+
+      <div class="d-flex align-items-center ms-auto">
+        <span class="text-white me-3">Welcome, {{ current_user.username }}</span>
+        <a href="{{ url_for('auth.logout') }}" class="btn btn-outline-light btn-sm">Logout</a>
+      </div>
+    </div>
+  </nav>
+
+  <!-- Wrapper for sidebar and content -->
+  <div class="d-flex">
+    <!-- Sidebar -->
+    <div id="sidebar" class="bg-light border-end position-fixed h-100 p-3">
+      <ul class="nav flex-column">
+		<li class="nav-item"><a class="nav-link" href="{{ url_for('admin.dashboard') }}">🏠 Dashboard</a></li>
+		<li class="nav-item">
+		<a class="nav-link" data-bs-toggle="collapse" href="#userSubMenu" role="button" aria-expanded="false" aria-controls="userSubMenu">
+		<i class="bi bi-people"></i> User Management
+		</a>
+		<div class="collapse" id="userSubMenu">
+			<ul class="nav flex-column ms-3">
+			<li class="nav-item">
+          <a class="nav-link" href="{{ url_for('admin.create_user') }}">Create User</a>
+			</li>
+			<li class="nav-item">
+          <a class="nav-link" href="{{ url_for('admin.list_users') }}">List Users</a>
+			</li>
+			</ul>
+			</div>
+		</li>
+        <li class="nav-item">
+		<a class="nav-link" data-bs-toggle="collapse" href="#memberSubMenu" role="button" aria-expanded="false" aria-controls="memberSubMenu">
+		  Member Management
+		</a>
+		<div class="collapse" id="memberSubMenu">
+		  <ul class="nav flex-column ms-3">
+			<li class="nav-item">
+			  <a class="nav-link load-page" href="{{ url_for('admin.add_member') }}">Add New Member</a>
+			</li>
+			<li class="nav-item">
+			  <a class="nav-link load-page" href="{{ url_for('admin.list_members') }}">List Members</a>
+			</li>
+			<li class="nav-item">
+			<a class="nav-link load-page" href="{{ url_for('admin.open_account') }}">Open Member Account</a>
+			</li>
+			<li class="nav-item">
+			<a class="nav-link load-page" href="{{ url_for('admin.post_transaction') }}">Post Payment</a>
+			</li>
+			<li class="nav-item">
+			<a class="nav-link load-page" href="{{ url_for('admin.list_member_deposits') }}">View Member Deposits</a>
+			</li>
+		  </ul>
+		</div>
+		</li>
+
+        <li class="nav-item"><a class="nav-link" href="#">💰 Deposits</a></li>
+		<li class="nav-item">
+		  <a class="nav-link collapsed" href="#" data-bs-toggle="collapse" data-bs-target="#loanMenu" aria-expanded="false">
+			<i class="bi bi-cash-stack"></i>
+			<span>Loans</span>
+			<i class="bi bi-chevron-down float-end"></i>
+		  </a>
+		  <div id="loanMenu" class="collapse" data-bs-parent="#sidebarMenu">
+			<ul class="nav flex-column ms-3">
+			  <li class="nav-item">
+				<a class="nav-link" href="{{ url_for('admin.disburse_loan') }}">
+				  <i class="bi bi-plus-circle"></i> Disburse Loan
+				</a>
+			  </li>
+			  <li class="nav-item">
+				<a class="nav-link" href="{{ url_for('admin.loan_repayment') }}">
+				  <i class="bi bi-plus-circle"></i> Master Payment -Loans & savings 
+				</a>
+			  </li>
+						  <li class="nav-item">
+			  <a class="nav-link" href="{{ url_for('admin.loan_prepayment') }}">
+				<i class="bi bi-cash-stack me-1"></i> Loan Prepayment
+			  </a>
+			</li>
+
+			  <li class="nav-item">
+				<a class="nav-link" href="{{ url_for('admin.list_loans') }}">
+				  <i class="bi bi-list-check"></i> List Loans
+				</a>
+			  </li>
+			</ul>
+		  </div>
+		</li>
+
+
+        <li class="nav-item"><a class="nav-link" href="#">🔁 Transactions</a></li>
+        <li class="nav-item"><a class="nav-link" href="#">📊 Reports</a></li>
+        <li class="nav-item"><a class="nav-link" href="#">🧾 Statements</a></li>
+        <li class="nav-item"><a class="nav-link" href="#">🕵️ Audit Logs</a></li>
+				<li class="nav-item">
+		  <a class="nav-link" href="{{ url_for('admin.upload_member_savings') }}">
+			<i class="bi bi-upload"></i> Upload Member Savings
+		  </a>
+		</li>
+		<li class="nav-item">
+		  <a class="nav-link" href="{{ url_for('admin.savings_statement_form') }}">
+			<i class="bi bi-file-earmark-text me-1"></i> Savings Statement (PDF)
+		  </a>
+		</li>
+
+      </ul>
+    </div>
+
+    <!-- Main content -->
+    <div id="content-wrapper" class="flex-grow-1 p-4" style="margin-left:250px;">
+      {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+          <div class="container mt-2">
+            {% for category, message in messages %}
+              <div class="alert alert-{{ category }} alert-dismissible fade show" role="alert">
+                {{ message }}
+                <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+              </div>
+            {% endfor %}
+          </div>
+        {% endif %}
+      {% endwith %}
+
+      {% block content %}
+      {% endblock %}
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+  <script>
+    const toggleSidebar = document.getElementById('toggleSidebar');
+    const sidebar = document.getElementById('sidebar');
+    const content = document.getElementById('content-wrapper');
+
+    toggleSidebar.addEventListener('click', () => {
+      sidebar.classList.toggle('collapsed');
+      if (sidebar.classList.contains('collapsed')) {
+        content.style.marginLeft = '0';
+      } else {
+        content.style.marginLeft = '250px';
+      }
+    });
+  </script>
+  <script>
+$(document).ready(function(){
+    $('.load-page').click(function(e){
+        e.preventDefault();
+        let url = $(this).attr('href');
+
+        $('#main-panel').load(url, function(){
+            // Bind AJAX submit
+            $('#createUserForm').on('submit', function(e){
+                e.preventDefault();
+                $.ajax({
+                    url: url,
+                    type: 'POST',
+                    data: $(this).serialize(),
+                    success: function(res){
+                        alert(res.message);
+                        // Optionally load List Users after creation
+                        $('#main-panel').load("{{ url_for('admin.list_users') }}");
+                    },
+                    error: function(xhr){
+                        let msg = xhr.responseJSON ? xhr.responseJSON.error : 'Unknown error';
+                        alert('Error: ' + msg);
+                    }
+                });
+            });
+        });
+    });
+});
+</script>
+<script>
+$(document).ready(function(){
+    $('.load-page').click(function(e){
+        e.preventDefault();
+        let url = $(this).attr('href');
+
+        $('#main-panel').load(url);
+    });
+});
+</script>
+
+</body>
+</html>

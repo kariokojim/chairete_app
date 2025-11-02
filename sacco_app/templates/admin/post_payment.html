@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block content %}
+<h4>Post Member Payment</h4>
+
+{% with messages = get_flashed_messages(with_categories=true) %}
+  {% if messages %}
+    {% for category, msg in messages %}
+      <div class="alert alert-{{ category }} alert-dismissible fade show">
+        {{ msg }}
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+      </div>
+    {% endfor %}
+  {% endif %}
+{% endwith %}
+
+<form method="POST">
+  {{ form.hidden_tag() }}
+  <div class="mb-3">
+    {{ form.member_no.label }} {{ form.member_no(class="form-control") }}
+  </div>
+  <div class="mb-3">
+    {{ form.amount.label }} {{ form.amount(class="form-control") }}
+  </div>
+  <div class="mb-3">
+    {{ form.reference.label }} {{ form.reference(class="form-control") }}
+  </div>
+  <div class="mb-3">
+    {{ form.bank_txn_date.label }} {{ form.bank_txn_date(class="form-control") }}
+  </div>
+  <div class="mb-3">
+    {{ form.narration.label }} {{ form.narration(class="form-control") }}
+  </div>
+  {{ form.submit(class="btn btn-success") }}
+</form>
+{% endblock %}

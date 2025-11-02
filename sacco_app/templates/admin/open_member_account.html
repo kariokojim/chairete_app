@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block content %}
+<h4>Open Account for {{ member.name }}</h4>
+
+<form method="POST">
+  <p>Click the button below to open a member account.</p>
+  <button type="submit" class="btn btn-success">Open Account</button>
+</form>
+{% endblock %}

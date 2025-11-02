@@ -1,0 +1,5 @@
+{% extends 'sacco/base.html' %}
+{% block content %}
+<h1>Welcome to SACCO</h1>
+<p><a href='{{ url_for('auth.login') }}'>Login</a> | <a href='{{ url_for('admin.dashboard') }}'>Admin Dashboard</a></p>
+{% endblock %}

@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="container mt-4">
+  <h4>Open Member Account</h4>
+  <hr>
+
+  <form method="POST">
+    {{ form.hidden_tag() }}
+    
+    <div class="mb-3">
+      {{ form.member_no.label }}
+      {{ form.member_no(class="form-control", id="member_no") }}
+    </div>
+
+    <div class="mb-3">
+      {{ form.member_name.label }}
+      {{ form.member_name(class="form-control", id="member_name") }}
+    </div>
+
+    <div class="mb-3">
+      {{ form.account_type.label }}
+      {{ form.account_type(class="form-select") }}
+    </div>
+
+    {{ form.submit(class="btn btn-primary") }}
+  </form>
+</div>
+<script>
+$(document).ready(function() {
+  // When user leaves the member number input field
+  $('#member_no').on('blur', function() {
+    const memberNo = $(this).val().trim();
+    if (memberNo === '') {
+      $('#member_name').val('');
+      return;
+    }
+
+    $.ajax({
+      url: "{{ url_for('admin.get_member_name') }}",
+      method: 'GET',
+      data: { member_no: memberNo },
+      success: function(response) {
+        if (response.name) {
+          $('#member_name').val(response.name);
+        } else {
+          $('#member_name').val('');
+          alert('⚠️ Member not found! Please check the Member Number.');
+        }
+      },
+      error: function() {
+        alert('❌ An error occurred while fetching member details.');
+      }
+    });
+  });
+});
+</script>
+
+<script>
+document.getElementById('member_no').addEventListener('blur', function() {
+  const memberNo = this.value.trim();
+  if (memberNo) {
+    fetch(`/get_member_name?member_no=${memberNo}`)
+      .then(res => res.json())
+      .then(data => {
+        document.getElementById('member_name').value = data.name || '';
+      });
+  }
+});
+</script>
+{% endblock %}

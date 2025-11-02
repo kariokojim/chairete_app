@@ -1,0 +1,57 @@
+body {
+  background-color: #f3f9ff;
+  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+}
+
+#sidebar {
+  width: 250px;
+  background-color: #e7f1ff;
+  transition: margin-left 0.3s ease;
+}
+
+#sidebar.collapsed {
+  margin-left: -250px;
+}
+
+#sidebar .nav-link {
+  color: #004c8c;
+  font-weight: 500;
+  margin-bottom: 0.5rem;
+  border-radius: 0.5rem;
+  transition: all 0.2s ease;
+}
+
+#sidebar .nav-link:hover {
+  background-color: #cfe3ff;
+  color: #002b50;
+}
+
+.navbar {
+  background-color: #007bff !important;
+}
+
+#content-wrapper {
+  background-color: white;
+  border-radius: 10px;
+  box-shadow: 0 0 8px rgba(0,0,0,0.1);
+  min-height: 100vh;
+}
+.bg-lightblue {
+  background-color: #e7f3ff !important;
+}
+.card {
+  border-radius: 10px;
+  transition: transform 0.2s ease;
+}
+.card:hover {
+  transform: translateY(-4px);
+}
+.dashboard-card {
+  border-radius: 15px;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+.dashboard-card:hover {
+  transform: translateY(-5px);
+  box-shadow: 0 6px 16px rgba(0,0,0,0.15);
+}
+

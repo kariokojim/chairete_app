@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="container mt-4">
+  <h3>Upload Summary</h3>
+  <p class="text-success">✅ {{ success_count }} transactions posted successfully.</p>
+  <p class="text-danger">❌ {{ failed_rows|length }} failed.</p>
+
+  {% if failed_rows %}
+  <table class="table table-bordered table-striped">
+    <thead>
+      <tr>
+        <th>#</th>
+        <th>Member No</th>
+        <th>Error</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in failed_rows %}
+      <tr>
+        <td>{{ row.row }}</td>
+        <td>{{ row.member_no }}</td>
+        <td>{{ row.error }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+</div>
+{% endblock %}
