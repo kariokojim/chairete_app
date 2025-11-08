@@ -32,5 +32,8 @@ def create_app():
             else:
                 return redirect(url_for('member.dashboard'))
         return redirect(url_for('auth.login'))
-
+        # Health check
+    @app.route("/ping")
+    def ping():
+        return {"status": "ok", "message": "Sacco app running!"}, 200
     return app
