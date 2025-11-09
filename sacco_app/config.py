@@ -1,7 +1,7 @@
 import os
-class Config:
-    SECRET_KEY = os.environ.get('SECRET_KEY', 'change_this_secret_key')
-    SQLALCHEMY_DATABASE_URI = os.environ.get('DATABASE_URL', 'postgresql+psycopg2://postgres:Cariocoh%40100@localhost:5432/sacco_db')
+class Config:    
+    SECRET_KEY = os.environ.get('SECRET_KEY', 'dev_secret_key')
+    SQLALCHEMY_DATABASE_URI = os.environ.get('DATABASE_URL')
     SQLALCHEMY_TRACK_MODIFICATIONS = False
     WTF_CSRF_ENABLED = True
     WTF_CSRF_CHECK_DEFAULT = False
