@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="container mt-5 mb-5">
+  <div class="card shadow-lg border-0">
+    <div class="card-header bg-primary text-white text-center">
+      <h4 class="mb-0 fw-bold">📄 Generate Loan Statement</h4>
+    </div>
+    <div class="card-body p-4">
+
+      <form method="get" action="{{ url_for('admin.loan_statement_pdf') }}">
+        <div class="row mb-3">
+          <div class="col-md-4">
+            <label for="member_no" class="form-label fw-bold">Member Number</label>
+            <input type="text" id="member_no" name="member_no" class="form-control" placeholder="Enter member no (e.g. M0021)" required>
+          </div>
+
+          <div class="col-md-4">
+            <label for="start_date" class="form-label fw-bold">Start Date</label>
+            <input type="date" id="start_date" name="start_date" class="form-control" required>
+          </div>
+
+          <div class="col-md-4">
+            <label for="end_date" class="form-label fw-bold">End Date</label>
+            <input type="date" id="end_date" name="end_date" class="form-control" required>
+          </div>
+        </div>
+
+        <div class="text-center mt-4">
+          <button type="submit" class="btn btn-success px-4">
+            <i class="bi bi-file-earmark-pdf"></i> Generate PDF
+          </button>
+          <a href="{{ url_for('admin.dashboard') }}" class="btn btn-secondary px-4 ms-2">
+            <i class="bi bi-arrow-left"></i> Back to Dashboard
+          </a>
+        </div>
+      </form>
+
+    </div>
+  </div>
+</div>
+
+<!-- Optional script to auto-fill today's date -->
+<script>
+document.addEventListener("DOMContentLoaded", function() {
+  const today = new Date().toISOString().split("T")[0];
+  const start = new Date();
+  start.setMonth(start.getMonth() - 3);
+  const startStr = start.toISOString().split("T")[0];
+
+  document.getElementById("start_date").value = startStr;
+  document.getElementById("end_date").value = today;
+});
+</script>
+{% endblock %}
