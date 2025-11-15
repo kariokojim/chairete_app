@@ -1792,31 +1792,27 @@ def search_member():
     # ✅ If no query param → render HTML page
     return render_template('admin/search_member.html')
 
-# ---------- MEMBER PROFILE ----------
-@admin_bp.route('/members/<member_no>', methods=['GET'])
+@admin_bp.route('/member/<member_no>', methods=['GET'])
 @login_required
-def view_member_profile(member_no):
-    """Display full member details including savings and loan info."""
+def view_member(member_no):
+    """
+    Displays member profile details when clicked from search results.
+    """
+    from sacco_app.models import Member, SaccoAccount, Loan
+
     member = Member.query.filter_by(member_no=member_no).first()
 
     if not member:
         flash(f"Member {member_no} not found.", "danger")
-        return redirect(url_for('admin.search_member_form'))
+        return redirect(url_for('admin.search_member'))
 
-    # Savings account
-    savings_acc = SaccoAccount.query.filter_by(member_no=member_no, account_type='SAVINGS').first()
-    savings_balance = savings_acc.balance if savings_acc else 0
-
-    # Active loans
-    loans = Loan.query.filter_by(member_no=member_no).filter(Loan.status != 'Cleared').all()
-
-    # Total outstanding loan balance
-    total_loan_balance = sum([loan.balance for loan in loans]) if loans else 0
+    # Get member's savings and loans
+    savings = SaccoAccount.query.filter_by(member_no=member_no, account_type='SAVINGS').first()
+    loans = Loan.query.filter_by(member_no=member_no).all()
 
     return render_template(
-        'admin/member_profile.html',
+        'admin/view_member.html',
         member=member,
-        savings_balance=savings_balance,
-        loans=loans,
-        total_loan_balance=total_loan_balance
+        savings=savings,
+        loans=loans
     )
