@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="container mt-4 mb-5">
+  <div class="card shadow border-0">
+    <div class="card-header bg-primary text-white">
+      <h4 class="fw-bold mb-0">👤 Member Profile</h4>
+    </div>
+    <div class="card-body p-4">
+
+      <!-- Member Info -->
+      <div class="row mb-4">
+        <div class="col-md-6">
+          <h5 class="fw-bold text-primary">{{ member.full_name }}</h5>
+          <p><b>Member No:</b> {{ member.member_no }}</p>
+          <p><b>ID Number:</b> {{ member.id_number or 'N/A' }}</p>
+          <p><b>Phone:</b> {{ member.phone_number or 'N/A' }}</p>
+          <p><b>Email:</b> {{ member.email or 'N/A' }}</p>
+        </div>
+        <div class="col-md-6">
+          <p><b>Join Date:</b> {{ member.created_at.strftime("%Y-%m-%d") if member.created_at else 'N/A' }}</p>
+          <p><b>Savings Balance:</b> <span class="fw-bold text-success">KSh {{ '{:,.2f}'.format(savings_balance) }}</span></p>
+          <p><b>Total Loan Balance:</b> <span class="fw-bold text-danger">KSh {{ '{:,.2f}'.format(total_loan_balance) }}</span></p>
+        </div>
+      </div>
+
+      <hr>
+
+      <!-- Loans Table -->
+      <h5 class="fw-bold text-primary mb-3">📄 Active Loans</h5>
+      {% if loans %}
+        <table class="table table-bordered table-hover align-middle">
+          <thead class="table-light">
+            <tr>
+              <th>Loan No</th>
+              <th>Amount</th>
+              <th>Balance</th>
+              <th>Period</th>
+              <th>Interest Rate</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for loan in loans %}
+              <tr>
+                <td>{{ loan.loan_no }}</td>
+                <td>KSh {{ '{:,.2f}'.format(loan.loan_amount) }}</td>
+                <td class="text-danger fw-bold">KSh {{ '{:,.2f}'.format(loan.balance) }}</td>
+                <td>{{ loan.loan_period }} months</td>
+                <td>{{ loan.interest_rate }}%</td>
+                <td>{{ loan.status }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      {% else %}
+        <p class="text-muted">No active loans for this member.</p>
+      {% endif %}
+
+      <hr>
+
+      <!-- Actions -->
+      <div class="text-center mt-4">
+        <a href="{{ url_for('admin.savings_statement_form') }}?member_no={{ member.member_no }}" class="btn btn-success me-2">
+          💰 View Savings Statement
+        </a>
+        <a href="{{ url_for('admin.loan_statement_form') }}?member_no={{ member.member_no }}" class="btn btn-primary me-2">
+          📄 View Loan Statement
+        </a>
+        <a href="{{ url_for('admin.search_member_form') }}" class="btn btn-secondary">
+          🔙 Back to Search
+        </a>
+      </div>
+
+    </div>
+  </div>
+</div>
+{% endblock %}

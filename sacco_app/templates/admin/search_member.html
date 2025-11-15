@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="container mt-5">
+  <div class="card shadow border-0">
+    <div class="card-header bg-primary text-white text-center">
+      <h4 class="fw-bold mb-0">🔍 Search Member</h4>
+    </div>
+    <div class="card-body p-4">
+
+      <!-- Search box -->
+      <div class="input-group mb-3">
+        <input type="text" id="searchQuery" class="form-control" placeholder="Enter name, ID, phone, or member number...">
+        <button class="btn btn-success" id="searchBtn"><i class="bi bi-search"></i> Search</button>
+      </div>
+
+      <!-- Results table -->
+      <div id="resultsContainer" class="mt-4">
+        <p class="text-muted text-center">Start typing to search for a member...</p>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<script>
+$(document).ready(function(){
+  $('#searchBtn').click(function(){
+    let query = $('#searchQuery').val().trim();
+    if (!query) {
+      $('#resultsContainer').html('<p class="text-danger text-center">Please enter a search term.</p>');
+      return;
+    }
+
+    $('#resultsContainer').html('<p class="text-muted text-center">Searching...</p>');
+
+    $.getJSON(`/admin/api/members/search?q=${encodeURIComponent(query)}`, function(data){
+      if (data.error) {
+        $('#resultsContainer').html(`<p class="text-danger text-center">${data.error}</p>`);
+        return;
+      }
+      if (data.length === 0) {
+        $('#resultsContainer').html('<p class="text-warning text-center">No member found.</p>');
+        return;
+      }
+
+      let table = `
+        <table class="table table-hover table-bordered mt-3">
+          <thead class="table-light">
+            <tr>
+              <th>Member No</th>
+              <th>Full Name</th>
+              <th>ID Number</th>
+              <th>Phone</th>
+              <th>Email</th>
+              <th>Joined</th>
+            </tr>
+          </thead>
+          <tbody>
+      `;
+
+      data.forEach(m => {
+        table += `
+          <tr>
+            <td>${m.member_no}</td>
+            <td>${m.full_name}</td>
+            <td>${m.id_number || '-'}</td>
+            <td>${m.phone_number || '-'}</td>
+            <td>${m.email || '-'}</td>
+            <td>${m.join_date || '-'}</td>
+          </tr>`;
+      });
+
+      table += "</tbody></table>";
+      $('#resultsContainer').html(table);
+    }).fail(function(){
+      $('#resultsContainer').html('<p class="text-danger text-center">Error fetching member data.</p>');
+    });
+  });
+});
+</script>
+{% endblock %}
