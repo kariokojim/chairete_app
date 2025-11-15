@@ -1753,3 +1753,70 @@ def loan_statement_pdf():
 
     buffer.seek(0)
     return send_file(buffer, as_attachment=True, download_name=filename, mimetype='application/pdf')
+
+@admin_bp.route('/search_member', methods=['GET'])
+@login_required
+def search_member():
+    """
+    Allows searching for a member by member number, name, ID, or phone.
+    Returns JSON for AJAX or renders the search form page.
+    """
+    from sacco_app.models import Member
+    from sqlalchemy import or_
+    from flask import request, jsonify, render_template
+
+    query = request.args.get('query', '').strip()
+
+    # If AJAX search (query param provided)
+    if query:
+        results = Member.query.filter(
+            or_(
+                Member.member_no.ilike(f"%{query}%"),
+                Member.name.ilike(f"%{query}%"),
+                Member.id_no.ilike(f"%{query}%"),
+                Member.phone.ilike(f"%{query}%")
+            )
+        ).limit(20).all()
+
+        # ✅ Return JSON cleanly for AJAX
+        return jsonify([
+            {
+                "member_no": m.member_no,
+                "name": m.name,
+                "id_no": m.id_no,
+                "phone": m.phone,
+            }
+            for m in results
+        ])
+
+    # ✅ If no query param → render HTML page
+    return render_template('admin/search_member.html')
+
+# ---------- MEMBER PROFILE ----------
+@admin_bp.route('/members/<member_no>', methods=['GET'])
+@login_required
+def view_member_profile(member_no):
+    """Display full member details including savings and loan info."""
+    member = Member.query.filter_by(member_no=member_no).first()
+
+    if not member:
+        flash(f"Member {member_no} not found.", "danger")
+        return redirect(url_for('admin.search_member_form'))
+
+    # Savings account
+    savings_acc = SaccoAccount.query.filter_by(member_no=member_no, account_type='SAVINGS').first()
+    savings_balance = savings_acc.balance if savings_acc else 0
+
+    # Active loans
+    loans = Loan.query.filter_by(member_no=member_no).filter(Loan.status != 'Cleared').all()
+
+    # Total outstanding loan balance
+    total_loan_balance = sum([loan.balance for loan in loans]) if loans else 0
+
+    return render_template(
+        'admin/member_profile.html',
+        member=member,
+        savings_balance=savings_balance,
+        loans=loans,
+        total_loan_balance=total_loan_balance
+    )
