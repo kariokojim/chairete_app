@@ -85,6 +85,8 @@
 			<li class="nav-item">
 			<a class="nav-link load-page" href="{{ url_for('admin.list_member_deposits') }}">View Member Deposits</a>
 			</li>
+			<li><a class="dropdown-item text-danger" href="{{ url_for('admin.reverse_transaction') }}">🔁 Reverse Transaction</a></li>
+
 		  </ul>
 		</div>
 		</li>
@@ -105,20 +107,21 @@
 			  </li>
 			  <li class="nav-item">
 				<a class="nav-link" href="{{ url_for('admin.upload_loan_repayments') }}">
-				📤 Upload Loan Repayments
+				Upload Repayments
 				</a>
 				</li>
-
 			  <li class="nav-item">
 				<a class="nav-link" href="{{ url_for('admin.loan_repayment') }}">
-				  <i class="bi bi-plus-circle"></i> Master Payment -Loans & savings 
+				  <i class="bi bi-plus-circle"></i> Master Payments 
 				</a>
 			  </li>
-						  <li class="nav-item">
+			<li class="nav-item">
 			  <a class="nav-link" href="{{ url_for('admin.loan_prepayment') }}">
 				<i class="bi bi-cash-stack me-1"></i> Loan Prepayment
 			  </a>
 			</li>
+			<li><a class="dropdown-item" href="{{ url_for('admin.repay_loan_from_savings') }}">
+			Payment from Savings</a></li>
 
 			  <li class="nav-item">
 				<a class="nav-link" href="{{ url_for('admin.list_loans') }}">
@@ -128,8 +131,31 @@
 			</ul>
 		  </div>
 		</li>
+		<li class="nav-item dropdown">
+		  <a class="nav-link dropdown-toggle text-blue" href="#" id="reportsDropdown" role="button"
+			 data-bs-toggle="dropdown" aria-expanded="false">
+			📄 Reports
+		  </a>
+		  <ul class="dropdown-menu dropdown-menu-dark" aria-labelledby="reportsDropdown">
+			<li>
+			  <a class="dropdown-item" href="{{ url_for('admin.generate_member_loan_summary') }}">
+				📊 Member Loan Summary
+			  </a>
+			</li>
+			<li>
+			  <a class="dropdown-item" href="{{ url_for('admin.generate_guarantor_report') }}">
+				🧾 Guarantor Report
+			  </a>
+			</li>
+				<li><a class="dropdown-item" href="{{ url_for('admin.trial_balance') }}">📘 Trial Balance</a></li>
+				<li><a class="dropdown-item" href="{{ url_for('admin.balance_sheet') }}">📊 Balance Sheet</a></li>
+				<li><a class="dropdown-item" href="{{ url_for('admin.income_statement') }}">📄 Income Statement</a></li>
+				<li><a class="dropdown-item" href="{{ url_for('admin.cashflow_statement') }}">💵 Cash Flow Statement</a></li>
+				<li><a class="dropdown-item" href="{{ url_for('admin.gl_report') }}">📘 GL Report</a></li>
 
-        <li class="nav-item"><a class="nav-link" href="#">📊 Reports</a></li>
+		  </ul>
+		</li>
+
 		<!-- Statements Dropdown -->
 		<li class="nav-item dropdown">
 		  <a class="nav-link dropdown-toggle" href="#" id="statementsDropdown" role="button"
