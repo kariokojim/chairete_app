@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="container mt-4">
+  <div class="card shadow-sm">
+    <div class="card-body">
+      <h4 class="mb-3 text-primary">💰 Loan Repayment from Savings</h4>
+
+      <form id="repayForm" method="POST" action="{{ url_for('admin.repay_loan_from_savings') }}">
+        <div class="mb-3">
+          <label class="form-label">Member Number</label>
+          <input type="text" name="member_no" id="member_no" class="form-control" placeholder="Enter member number" required>
+        </div>
+
+        <div class="mb-3">
+          <label class="form-label">Member Name</label>
+          <input type="text" id="member_name" class="form-control" readonly>
+        </div>
+
+        <div class="mb-3">
+          <label class="form-label">Savings Balance (KSh)</label>
+          <input type="text" id="savings_balance" class="form-control" readonly>
+        </div>
+
+        <div class="mb-3">
+          <label class="form-label">Loan Balance (KSh)</label>
+          <input type="text" id="loan_balance" class="form-control" readonly>
+        </div>
+
+        <div class="mb-3">
+          <label class="form-label">Loan Amount Due (KSh)</label>
+          <input type="text" id="amount_due" class="form-control" readonly>
+        </div>
+
+        <div class="mb-3">
+          <label class="form-label">Repayment Amount (KSh)</label>
+          <input type="number" step="0.01" name="amount" id="amount" class="form-control" required>
+        </div>
+
+        <div class="mb-3">
+          <label class="form-label">Narration</label>
+          <input type="text" name="narration" class="form-control" placeholder="Optional narration">
+        </div>
+
+        <button type="submit" class="btn btn-success w-100">Submit Repayment</button>
+      </form>
+    </div>
+  </div>
+</div>
+
+<script>
+document.getElementById('member_no').addEventListener('blur', async function() {
+  const memberNo = this.value.trim();
+  if (!memberNo) return;
+
+  const nameField = document.getElementById('member_name');
+  const savingsField = document.getElementById('savings_balance');
+  const loanField = document.getElementById('loan_balance');
+  const dueField = document.getElementById('amount_due');
+
+  nameField.value = 'Loading...';
+  savingsField.value = '';
+  loanField.value = '';
+  dueField.value = '';
+
+  try {
+    const response = await fetch(`/admin/api/member_loan_info?member_no=${memberNo}`);
+    const data = await response.json();
+
+    if (data.error) {
+      nameField.value = data.error;
+      return;
+    }
+
+    nameField.value = data.member_name;
+    savingsField.value = data.savings_balance.toLocaleString();
+    loanField.value = data.loan_balance.toLocaleString();
+    dueField.value = data.amount_due.toLocaleString();
+
+  } catch (err) {
+    nameField.value = "Error fetching data";
+  }
+});
+
+// Confirm before submitting
+document.getElementById('repayForm').addEventListener('submit', function(e) {
+  const amount = document.getElementById('amount').value;
+  const member = document.getElementById('member_name').value;
+  if (!confirm(`Are you sure you want to repay KSh ${amount} from ${member}'s savings?`)) {
+    e.preventDefault();
+  }
+});
+</script>
+{% endblock %}

@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div class="container mt-4">
+
+  <h3 class="text-primary mb-3">📊 Balance Sheet</h3>
+
+  <div class="row">
+    <!-- Assets -->
+    <div class="col-md-6">
+      <h5 class="text-success">Assets</h5>
+      <table class="table table-bordered">
+        {% for acc in assets %}
+        <tr>
+          <td>{{ acc.account_number }}</td>
+          <td class="text-end">{{ "%.2f"|format(acc.balance) }}</td>
+        </tr>
+        {% endfor %}
+        <tr class="table-info fw-bold">
+          <td>Total Assets</td>
+          <td class="text-end">{{ "%.2f"|format(total_assets) }}</td>
+        </tr>
+      </table>
+    </div>
+
+    <!-- Liabilities + Equity -->
+    <div class="col-md-6">
+      <h5 class="text-danger">Liabilities</h5>
+      <table class="table table-bordered">
+        {% for acc in liabilities %}
+        <tr>
+          <td>{{ acc.account_number }}</td>
+          <td class="text-end">{{ "%.2f"|format(acc.balance) }}</td>
+        </tr>
+        {% endfor %}
+        <tr class="table-info fw-bold">
+          <td>Total Liabilities</td>
+          <td class="text-end">{{ "%.2f"|format(total_liabilities) }}</td>
+        </tr>
+      </table>
+
+      <h5 class="text-primary mt-4">Equity</h5>
+      <table class="table table-bordered">
+        {% for acc in equity %}
+        <tr>
+          <td>{{ acc.account_number }}</td>
+          <td class="text-end">{{ "%.2f"|format(acc.balance) }}</td>
+        </tr>
+        {% endfor %}
+        <tr class="table-info fw-bold">
+          <td>Total Equity</td>
+          <td class="text-end">{{ "%.2f"|format(total_equity) }}</td>
+        </tr>
+
+        <tr class="table-warning fw-bold">
+          <td>Total Liabilities + Equity</td>
+          <td class="text-end">{{ "%.2f"|format(total_side) }}</td>
+        </tr>
+      </table>
+    </div>
+
+  </div>
+</div>
+
+{% endblock %}
+

@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="container mt-4">
+  <h3 class="text-primary mb-3">📄 Income Statement</h3>
+
+  <h5 class="text-success">Income</h5>
+  <table class="table table-bordered">
+    {% for acc in income_accounts %}
+    <tr>
+      <td>{{ acc.account_number }}</td>
+      <td class="text-end">{{ "%.2f"|format(acc.balance) }}</td>
+    </tr>
+    {% endfor %}
+    <tr class="table-info">
+      <td><strong>Total Income</strong></td>
+      <td class="text-end"><strong>{{ "%.2f"|format(total_income) }}</strong></td>
+    </tr>
+  </table>
+
+  <h5 class="text-danger mt-4">Expenses</h5>
+  <table class="table table-bordered">
+    {% for acc in expense_accounts %}
+    <tr>
+      <td>{{ acc.account_number }}</td>
+      <td class="text-end">{{ "%.2f"|format(acc.balance) }}</td>
+    </tr>
+    {% endfor %}
+    <tr class="table-info">
+      <td><strong>Total Expenses</strong></td>
+      <td class="text-end"><strong>{{ "%.2f"|format(total_expenses) }}</strong></td>
+    </tr>
+  </table>
+
+  <h4 class="mt-4 {% if net_income >= 0 %}text-success{% else %}text-danger{% endif %}">
+    <strong>Net Income: {{ "%.2f"|format(net_income) }}</strong>
+  </h4>
+
+</div>
+{% endblock %}

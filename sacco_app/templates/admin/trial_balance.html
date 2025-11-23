@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div class="container mt-4">
+  <h3 class="mb-3 text-primary">📘 Trial Balance</h3>
+
+  <table class="table table-bordered table-striped">
+    <thead class="table-dark">
+      <tr>
+        <th>Account Number</th>
+        <th>Type</th>
+        <th class="text-end">Debit</th>
+        <th class="text-end">Credit</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in data %}
+      <tr>
+        <td>{{ row.account_no }}</td>
+        <td>{{ row.account_type }}</td>
+        <td class="text-end">{{ "%.2f"|format(row.debit) }}</td>
+        <td class="text-end">{{ "%.2f"|format(row.credit) }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+
+    <tfoot>
+      <tr class="table-info fw-bold">
+        <td colspan="2" class="text-end">Totals</td>
+        <td class="text-end">{{ "%.2f"|format(total_debit) }}</td>
+        <td class="text-end">{{ "%.2f"|format(total_credit) }}</td>
+      </tr>
+    </tfoot>
+  </table>
+</div>
+
+{% endblock %}

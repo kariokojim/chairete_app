@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="container mt-4">
+  <div class="card shadow-sm">
+    <div class="card-body">
+      <h4 class="text-danger mb-3">🔁 Reverse Transaction</h4>
+      <form method="POST" action="{{ url_for('admin.reverse_transaction') }}">
+        <div class="mb-3">
+          <label class="form-label">Transaction Reference</label>
+          <input type="text" name="reference" class="form-control" placeholder="Enter reference number" required>
+          <small class="text-muted">Use the Reference shown in the Transaction table (e.g. TXNABC123).</small>
+        </div>
+
+        <div class="mb-3">
+          <label class="form-label">Reason for Reversal</label>
+          <textarea name="reason" class="form-control" placeholder="Enter reason for reversal" required></textarea>
+        </div>
+
+        <button type="submit" class="btn btn-danger w-100">Reverse Transaction</button>
+      </form>
+    </div>
+  </div>
+</div>
+{% endblock %}

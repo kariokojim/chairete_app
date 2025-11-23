@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="container mt-4">
+
+  <h3 class="text-primary mb-3">💵 Cash Flow Statement</h3>
+
+  <table class="table table-bordered">
+
+    <tr class="table-secondary">
+      <th colspan="2">Operating Activities</th>
+    </tr>
+    <tr>
+      <td>Net Income</td>
+      <td class="text-end">{{ "%.2f"|format(net_income) }}</td>
+    </tr>
+    <tr>
+      <td>Change in Working Capital</td>
+      <td class="text-end">{{ "%.2f"|format(working_capital_change) }}</td>
+    </tr>
+
+    <tr class="table-secondary">
+      <th colspan="2">Investing Activities</th>
+    </tr>
+    <tr>
+      <td>Investing Cash Flow</td>
+      <td class="text-end">{{ "%.2f"|format(investing_cashflow) }}</td>
+    </tr>
+
+    <tr class="table-secondary">
+      <th colspan="2">Financing Activities</th>
+    </tr>
+    <tr>
+      <td>Member Savings Movement</td>
+      <td class="text-end">{{ "%.2f"|format(financing_cashflow) }}</td>
+    </tr>
+
+    <tr class="table-info fw-bold">
+      <td>Total Cash Flow</td>
+      <td class="text-end">{{ "%.2f"|format(net_cashflow) }}</td>
+    </tr>
+
+    <tr class="table-warning fw-bold">
+      <td>Ending Cash Balance</td>
+      <td class="text-end">{{ "%.2f"|format(ending_cash) }}</td>
+    </tr>
+
+  </table>
+</div>
+{% endblock %}
