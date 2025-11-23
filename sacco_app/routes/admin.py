@@ -70,9 +70,10 @@ def create_user():
 
     return render_template('admin/create_user.html',form=form)
 
+##generate or add new member
 def generate_member_no():
     # Get last member
-    last_member = Member.query.order_by(Member.id.desc()).first()
+    last_member = Member.query.order_by(Member.member_no.desc()).first()
     if not last_member or not last_member.member_no:
         return "M0001"
     # Extract numeric part and increment
@@ -1815,4 +1816,679 @@ def view_member(member_no):
         member=member,
         savings=savings,
         loans=loans
+    )
+
+#excell reports
+
+@admin_bp.route('/reports/member_loan_summary', methods=['GET'])
+@login_required
+def generate_member_loan_summary():
+    """
+    Generates an Excel report summarizing each member's savings, loan, and overdue dues.
+    Overdue (loan dues) considers only unpaid principal and interest for schedules with due_date <= today.
+    """
+    from sacco_app.models import Member, SaccoAccount, Loan, LoanSchedule
+    from decimal import Decimal
+    from datetime import date
+    import pandas as pd
+    from io import BytesIO
+    from flask import send_file
+
+    today = date.today()
+    report_rows = []
+
+    members = Member.query.all()
+
+    for member in members:
+        # Savings balance
+        savings_acc = SaccoAccount.query.filter_by(member_no=member.member_no, account_type='SAVINGS').first()
+        savings_balance = savings_acc.balance if savings_acc else Decimal('0.00')
+
+        # Most recent loan (adjust if you want to aggregate multiple loans)
+        loan = Loan.query.filter_by(member_no=member.member_no).order_by(Loan.loan_no.desc()).first()
+        if loan:
+            original_loan_amount = loan.loan_amount or Decimal('0.00')
+            loan_balance = loan.balance or Decimal('0.00')
+        else:
+            original_loan_amount = Decimal('0.00')
+            loan_balance = Decimal('0.00')
+
+        # Compute overdue amounts: sum unpaid principal & interest where due_date <= today
+        overdue_principal = Decimal('0.00')
+        overdue_interest = Decimal('0.00')
+
+        if loan:
+            overdue_schedules = LoanSchedule.query.filter(
+                LoanSchedule.loan_no == loan.loan_no,
+                LoanSchedule.due_date <= today
+            ).all()
+
+            for s in overdue_schedules:
+                # outstanding portions (may be zero or positive)
+                unpaid_principal = (s.principal_due or Decimal('0.00')) - (s.principal_paid or Decimal('0.00'))
+                unpaid_interest = (s.interest_due or Decimal('0.00')) - (s.interest_paid or Decimal('0.00'))
+
+                if unpaid_principal > 0:
+                    overdue_principal += unpaid_principal
+                if unpaid_interest > 0:
+                    overdue_interest += unpaid_interest
+
+        total_overdue = overdue_principal + overdue_interest
+
+        report_rows.append({
+            'Member No': member.member_no,
+            'Member Name': member.name or '',
+            'Savings Balance': float(savings_balance),
+            'Original Loan Amount': float(original_loan_amount),
+            'Loan Balance': float(loan_balance),
+            'Overdue Principal': float(overdue_principal),
+            'Overdue Interest': float(overdue_interest),
+            'Total Overdue (Dues)': float(total_overdue)
+        })
+
+    # Create DataFrame
+    df = pd.DataFrame(report_rows, columns=[
+        'Member No', 'Member Name', 'Savings Balance', 'Original Loan Amount',
+        'Loan Balance', 'Overdue Principal', 'Overdue Interest', 'Total Overdue (Dues)'
+    ])
+
+    # Write to Excel in-memory
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+        df.to_excel(writer, sheet_name='Member Loan Summary', index=False)
+        ws = writer.sheets['Member Loan Summary']
+        ws.autofilter(0, 0, len(df), len(df.columns) - 1)
+        # set column widths nicely
+        ws.set_column(0, 1, 20)  # Member No, Member Name
+        ws.set_column(2, 4, 18)  # Balances and amounts
+        ws.set_column(5, 7, 18)  # Overdue columns
+
+    output.seek(0)
+
+    return send_file(
+        output,
+        as_attachment=True,
+        download_name='member_loan_summary.xlsx',
+        mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    )
+
+
+#report for guarantors
+
+@admin_bp.route('/reports/guarantor_report', methods=['GET'])
+@login_required
+def generate_guarantor_report():
+    """
+    Generates an Excel report showing all guarantors for each active or disbursed loan.
+    Includes borrower info, guarantor info, and guaranteed amounts.
+    """
+    from sacco_app.models import Member, Loan, LoanGuarantor, SaccoAccount
+    from decimal import Decimal
+    import pandas as pd
+    from io import BytesIO
+    from flask import send_file
+
+    report_data = []
+
+    # Fetch all loans that have guarantors
+    loans = Loan.query.all()
+
+    for loan in loans:
+        borrower = Member.query.filter_by(member_no=loan.member_no).first()
+        borrower_name = borrower.name if borrower else "Unknown Member"
+
+        # Loan balance
+        loan_balance = loan.balance or Decimal('0.00')
+
+        # Get all guarantors for this loan
+        guarantors = LoanGuarantor.query.filter_by(loan_no=loan.loan_no).all()
+
+        for g in guarantors:
+            guarantor_member = Member.query.filter_by(member_no=g.guarantor_no).first()
+            guarantor_name = guarantor_member.name if guarantor_member else "Unknown Guarantor"
+
+            # Guarantor savings balance
+            savings_acc = SaccoAccount.query.filter_by(
+                member_no=g.member_no, account_type='SAVINGS'
+            ).first()
+            guarantor_savings = savings_acc.balance if savings_acc else Decimal('0.00')
+
+            report_data.append({
+                "Loan No": loan.loan_no,
+                "Borrower No": loan.member_no,
+                "Borrower Name": borrower_name,
+                "Loan Amount": float(loan.loan_amount),
+                "Loan Balance": float(loan_balance),
+                "Guarantor No": g.guarantor_no,
+                "Guarantor Name": guarantor_name,
+                "Amount Guaranteed": float(g.amount_guaranteed),
+                "Guarantor Savings": float(guarantor_savings),
+            })
+
+    # --- Create DataFrame
+    df = pd.DataFrame(report_data, columns=[
+        "Loan No", "Borrower No", "Borrower Name", "Loan Amount", "Loan Balance",
+        "Guarantor No", "Guarantor Name", "Amount Guaranteed", "Guarantor Savings"
+    ])
+
+    # --- Create Excel file
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+        df.to_excel(writer, sheet_name='Guarantor Report', index=False)
+        ws = writer.sheets['Guarantor Report']
+        ws.autofilter(0, 0, len(df), len(df.columns) - 1)
+        ws.set_column(0, len(df.columns) - 1, 20)
+
+    output.seek(0)
+
+    return send_file(
+        output,
+        as_attachment=True,
+        download_name='guarantor_report.xlsx',
+        mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    )
+
+
+#pay loan from savings
+
+@admin_bp.route('/api/member_loan_info', methods=['GET'])
+@login_required
+def get_member_loan_info():
+    """
+    Returns member name, savings balance, and active loan info for use in AJAX lookups.
+    """
+    from sacco_app.models import Member, SaccoAccount, Loan, LoanSchedule
+    from decimal import Decimal
+    from datetime import date
+    from flask import jsonify, request
+
+    member_no = request.args.get('member_no', '').strip()
+    if not member_no:
+        return jsonify({"error": "Missing member number"}), 400
+
+    member = Member.query.filter_by(member_no=member_no).first()
+    if not member:
+        return jsonify({"error": "Member not found"}), 404
+
+    savings_acc = SaccoAccount.query.filter_by(member_no=member_no, account_type='SAVINGS').first()
+    savings_balance = float(savings_acc.balance) if savings_acc else 0.00
+
+    loan = Loan.query.filter_by(member_no=member_no, status='Active').first()
+    if not loan:
+        return jsonify({
+            "member_name": member.name,
+            "savings_balance": savings_balance,
+            "loan_balance": 0.00,
+            "amount_due": 0.00
+        })
+
+    # Get total amount due (principal + interest due on or before today)
+    from sqlalchemy import func
+    total_due = db.session.query(
+        func.sum((LoanSchedule.principal_due - LoanSchedule.principal_paid) +
+                 (LoanSchedule.interest_due - LoanSchedule.interest_paid))
+    ).filter(
+        LoanSchedule.loan_no == loan.loan_no,
+        LoanSchedule.due_date <= date.today()
+    ).scalar() or Decimal('0.00')
+
+    return jsonify({
+        "member_name": member.name,
+        "savings_balance": float(savings_balance),
+        "loan_balance": float(loan.balance or 0),
+        "amount_due": float(total_due)
+    })
+
+@admin_bp.route('/loans/repay_from_savings', methods=['GET', 'POST'])
+@login_required
+def repay_loan_from_savings():
+    """
+    Allows repayment of an active loan using funds from member's savings account.
+    Now includes Loan Control Account posting.
+    """
+    from sacco_app.models import Member, Loan, LoanSchedule, SaccoAccount, Transaction
+    from decimal import Decimal
+    from datetime import datetime
+    import uuid
+
+    if request.method == 'POST':
+        member_no = request.form.get('member_no').strip()
+        amount = Decimal(request.form.get('amount', '0'))
+        narration = request.form.get('narration') or "Loan repayment from savings"
+        txn_date = datetime.now()
+
+        member = Member.query.filter_by(member_no=member_no).first()
+        if not member:
+            flash(f"Member {member_no} not found.", "danger")
+            return redirect(url_for('admin.repay_loan_from_savings'))
+
+        savings_acc = SaccoAccount.query.filter_by(member_no=member_no, account_type='SAVINGS').first()
+        if not savings_acc:
+            flash("Member has no savings account.", "danger")
+            return redirect(url_for('admin.repay_loan_from_savings'))
+
+        if savings_acc.balance < amount:
+            flash("Insufficient savings balance.", "danger")
+            return redirect(url_for('admin.repay_loan_from_savings'))
+
+        loan = Loan.query.filter_by(member_no=member_no, status='Active').first()
+        if not loan:
+            flash("No active loan found for this member.", "danger")
+            return redirect(url_for('admin.repay_loan_from_savings'))
+
+        # --- Get GL Accounts
+        loan_principal_acc = SaccoAccount.query.filter_by(member_no=member_no,account_type='LOAN').first()
+        loan_control_acc = SaccoAccount.query.filter_by(account_number='M000GL_LOAN').first()
+        interest_income_acc = SaccoAccount.query.filter_by(account_number='M000GL_LN_INT').first()
+        savings_control_acc = SaccoAccount.query.filter_by(account_number='M000GL_SAVINGS').first()
+
+        if not all([loan_principal_acc, interest_income_acc, savings_control_acc, loan_control_acc]):
+            flash("Required GL accounts missing (Loan/Savings/Control).", "danger")
+            return redirect(url_for('admin.repay_loan_from_savings'))
+
+        due_schedule = LoanSchedule.query.filter(
+            LoanSchedule.loan_no == loan.loan_no,
+            LoanSchedule.status == 'DUE'
+        ).order_by(LoanSchedule.due_date).first()
+
+        if not due_schedule:
+            flash("No due schedule found for repayment.", "warning")
+            return redirect(url_for('admin.repay_loan_from_savings'))
+
+        remaining = amount
+        txn_ref = f"TXN{uuid.uuid4().hex[:10].upper()}"
+        transactions = []
+
+        # 1️⃣ Deduct from member savings (Credit)
+        savings_acc.balance -= amount
+        txn_savings = Transaction(
+            txn_no=f"TXN{uuid.uuid4().hex[:10].upper()}",
+            member_no=member_no,
+            account_no=savings_acc.account_number,
+            gl_account='SAVINGS',
+            tran_type='LIABILITY',
+            debit_amount=amount,
+            credit_amount=Decimal('0'),
+            reference=txn_ref,
+            narration=f"Loan repayment from savings",
+            bank_txn_date=txn_date,
+            posted_by=current_user.username,
+            running_balance=savings_acc.balance
+        )
+        transactions.append(txn_savings)
+
+        # 2️⃣ Debit savings control (Dr)
+        savings_control_acc.balance -= amount
+        txn_ctrl = Transaction(
+            txn_no=f"TXN{uuid.uuid4().hex[:10].upper()}",
+            member_no='M000GL',
+            account_no=savings_control_acc.account_number,
+            gl_account='SAVINGS_CONTROL',
+            tran_type='LIABILITY',
+            debit_amount=Decimal('0'),
+            credit_amount=amount,
+            reference=txn_ref,
+            narration=f"Loan repayment (from savings) for {member_no}",
+            bank_txn_date=txn_date,
+            posted_by=current_user.username,
+            running_balance=savings_control_acc.balance
+        )
+        transactions.append(txn_ctrl)
+
+        # 3️⃣ Pay Interest (Credit Income)
+        interest_due = due_schedule.interest_due - due_schedule.interest_paid
+        if remaining > 0 and interest_due > 0:
+            pay_interest = min(remaining, interest_due)
+            remaining -= pay_interest
+            due_schedule.interest_paid += pay_interest
+            interest_income_acc.balance += pay_interest
+
+            txn_int = Transaction(
+                txn_no=f"TXN{uuid.uuid4().hex[:10].upper()}",
+                member_no=member_no,
+                account_no=interest_income_acc.account_number,
+                gl_account='INTEREST_INCOME',
+                tran_type='INCOME',
+                debit_amount=Decimal('0'),
+                credit_amount=pay_interest,
+                reference=txn_ref,
+                narration=f"Interest repayment - {member_no}",
+                bank_txn_date=txn_date,
+                posted_by=current_user.username,
+                running_balance=interest_income_acc.balance
+            )
+            transactions.append(txn_int)
+
+        # 4️⃣ Pay Principal (reduce loan & loan control)
+        principal_due = due_schedule.principal_due - due_schedule.principal_paid
+        if remaining > 0 and principal_due > 0:
+            pay_principal = min(remaining, principal_due)
+            remaining -= pay_principal
+            due_schedule.principal_paid += pay_principal
+            loan.balance -= pay_principal
+            loan_principal_acc.balance -= pay_principal
+            loan_control_acc.balance -= pay_principal  # <-- NEW POSTING HERE
+
+            # a) Credit Loan Control
+            txn_ctrl_credit = Transaction(
+                txn_no=f"TXN{uuid.uuid4().hex[:10].upper()}",
+                member_no='M000GL',
+                account_no=loan_control_acc.account_number,
+                gl_account='LOAN_CONTROL',
+                tran_type='ASSET',
+                debit_amount=Decimal('0'),
+                credit_amount=pay_principal,
+                reference=txn_ref,
+                narration=f"Loan control credit for {member_no}",
+                bank_txn_date=txn_date,
+                posted_by=current_user.username,
+                running_balance=loan_control_acc.balance
+            )
+            transactions.append(txn_ctrl_credit)
+
+            # b) Debit Loan GL
+            txn_principal = Transaction(
+                txn_no=f"TXN{uuid.uuid4().hex[:10].upper()}",
+                member_no=member_no,
+                account_no=loan_principal_acc.account_number,
+                gl_account='LOAN_PRINCIPAL',
+                tran_type='ASSET',
+                debit_amount=pay_principal,
+                credit_amount=Decimal('0'),
+                reference=txn_ref,
+                narration=f"Loan principal repayment - {member_no}",
+                bank_txn_date=txn_date,
+                posted_by=current_user.username,
+                running_balance=loan_principal_acc.balance
+            )
+            transactions.append(txn_principal)
+
+        # 5️⃣ Mark schedule as PAID if fully settled
+        if (due_schedule.principal_paid >= due_schedule.principal_due) and (due_schedule.interest_paid >= due_schedule.interest_due):
+            due_schedule.status = 'PAID'
+
+        db.session.add_all(transactions)
+        db.session.commit()
+
+        flash(f"Loan repayment of KSh {amount} from savings posted successfully.", "success")
+        return redirect(url_for('admin.repay_loan_from_savings'))
+
+    return render_template('admin/repay_loan_from_savings.html')
+
+@admin_bp.route('/transactions/reverse', methods=['GET', 'POST'])
+@login_required
+def reverse_transaction():
+    """
+    Allows authorized users to reverse a transaction by reference.
+    It posts exact opposite entries for the same accounts and updates balances.
+    """
+    from sacco_app.models import Transaction, SaccoAccount
+    from decimal import Decimal
+    from datetime import datetime
+    import uuid
+
+    if request.method == 'POST':
+        ref_no = request.form.get('reference').strip()
+        reason = request.form.get('reason', '').strip()
+
+        if not ref_no:
+            flash("Reference number is required.", "danger")
+            return redirect(url_for('admin.reverse_transaction'))
+
+        # Find transactions with this reference
+        original_txns = Transaction.query.filter_by(reference=ref_no).all()
+
+        if not original_txns:
+            flash(f"No unreversed transactions found with reference {ref_no}.", "warning")
+            return redirect(url_for('admin.reverse_transaction'))
+
+        reversal_ref = f"REV{uuid.uuid4().hex[:10].upper()}"
+        reversal_txns = []
+
+        for txn in original_txns:
+            # Fetch account
+            acc = SaccoAccount.query.filter_by(account_number=txn.account_no).first()
+            if not acc:
+                continue
+
+            # Reverse the amounts
+            debit = txn.credit_amount
+            credit = txn.debit_amount
+
+            # Update account running balance
+            if debit > 0:
+                acc.balance += debit
+            if credit > 0:
+                acc.balance -= credit
+
+            # Create reversal transaction
+            rev = Transaction(
+                txn_no=f"TXN{uuid.uuid4().hex[:10].upper()}",
+                member_no=txn.member_no,
+                account_no=txn.account_no,
+                gl_account=txn.gl_account,
+                tran_type=txn.tran_type,
+                debit_amount=debit,
+                credit_amount=credit,
+                reference=reversal_ref,
+                narration=f"Reversal of {txn.txn_no}: {reason}",
+                bank_txn_date=datetime.now(),
+                posted_by=current_user.username,
+                running_balance=acc.balance,
+                created_at=datetime.now()
+            )
+            reversal_txns.append(rev)
+
+
+        db.session.add_all(reversal_txns)
+        db.session.commit()
+
+        flash(f"Transactions reversed successfully. Reversal Ref: {reversal_ref}", "success")
+        return redirect(url_for('admin.reverse_transaction'))
+
+    return render_template('admin/reverse_transaction.html')
+
+## generate trial balance and balance sheet
+@admin_bp.route('/reports/trial_balance', methods=['GET'])
+@login_required
+def trial_balance():
+    """Generate Trial Balance from GL account balances."""
+
+    from sacco_app.models import SaccoAccount
+    from decimal import Decimal
+
+    accounts = SaccoAccount.query.all()
+
+    trial_data = []
+    total_debit = Decimal('0.00')
+    total_credit = Decimal('0.00')
+
+    for acc in accounts:
+        debit = Decimal("0.00")
+        credit = Decimal("0.00")
+
+        # Normal accounting treatment
+        if acc.account_type in ["ASSET", "EXPENSE"]:
+            if acc.balance >= 0:
+                debit = acc.balance
+            else:
+                credit = abs(acc.balance)
+
+        elif acc.account_type in ["LIABILITY", "EQUITY", "INCOME"]:
+            if acc.balance >= 0:
+                credit = acc.balance
+            else:
+                debit = abs(acc.balance)
+
+        trial_data.append({
+            "account_no": acc.account_number,
+            "account_type": acc.account_type,
+            "debit": float(debit),
+            "credit": float(credit)
+        })
+
+        total_debit += debit
+        total_credit += credit
+
+    return render_template(
+        "admin/trial_balance.html",
+        data=trial_data,
+        total_debit=float(total_debit),
+        total_credit=float(total_credit)
+    )
+
+
+## balance sheet route
+
+@admin_bp.route('/reports/balance_sheet', methods=['GET'])
+@login_required
+def balance_sheet():
+    """Generate Balance Sheet."""
+
+    from sacco_app.models import SaccoAccount
+    from decimal import Decimal
+
+    accounts = SaccoAccount.query.all()
+
+    assets = []
+    liabilities = []
+    equity = []
+
+    total_assets = Decimal('0.00')
+    total_liabilities = Decimal('0.00')
+    total_equity = Decimal('0.00')
+
+    for acc in accounts:
+        if acc.account_type == "ASSET":
+            assets.append(acc)
+            total_assets += acc.balance
+
+        elif acc.account_type == "LIABILITY":
+            liabilities.append(acc)
+            total_liabilities += acc.balance
+
+        elif acc.account_type in ["EQUITY", "INCOME"]:  
+            equity.append(acc)
+            total_equity += acc.balance
+
+    # EQUITY adjustment: equity = income + capital - expenses are already included
+    return render_template(
+        "admin/balance_sheet.html",
+        assets=assets, liabilities=liabilities, equity=equity,
+        total_assets=float(total_assets),
+        total_liabilities=float(total_liabilities),
+        total_equity=float(total_equity),
+        total_side=float(total_liabilities + total_equity)
+    )
+
+## income and expenditure account
+
+@admin_bp.route('/reports/income_statement', methods=['GET'])
+@login_required
+def income_statement():
+    """
+    Generates SACCO Income Statement: Income - Expenses.
+    """
+    from sacco_app.models import SaccoAccount
+    from decimal import Decimal
+
+    income_accounts = SaccoAccount.query.filter_by(account_type='INCOME').all()
+    expense_accounts = SaccoAccount.query.filter_by(account_type='EXPENSE').all()
+
+    total_income = sum([acc.balance for acc in income_accounts])
+    total_expenses = sum([acc.balance for acc in expense_accounts])
+
+    net_income = total_income - total_expenses
+
+    return render_template(
+        "admin/income_statement.html",
+        income_accounts=income_accounts,
+        expense_accounts=expense_accounts,
+        total_income=total_income,
+        total_expenses=total_expenses,
+        net_income=net_income
+    )
+
+
+### cash Flow 
+
+@admin_bp.route('/reports/cashflow_statement', methods=['GET'])
+@login_required
+def cashflow_statement():
+    """
+    Generates simplified SACCO Cash Flow Statement using indirect method.
+    """
+    from sacco_app.models import SaccoAccount, Transaction
+    from decimal import Decimal
+
+    # 1️⃣ Get Net Income from P&L (Income - Expenses)
+    income_accounts = SaccoAccount.query.filter_by(account_type='INCOME').all()
+    expense_accounts = SaccoAccount.query.filter_by(account_type='EXPENSE').all()
+
+    net_income = sum([acc.balance for acc in income_accounts]) - \
+                 sum([acc.balance for acc in expense_accounts])
+
+    # 2️⃣ Change in Working Capital (Assets & Liabilities except cash)
+    asset_accounts = SaccoAccount.query.filter_by(account_type='ASSET').all()
+    liability_accounts = SaccoAccount.query.filter_by(account_type='LIABILITY').all()
+
+    working_capital_change = sum([acc.balance for acc in liability_accounts]) - \
+                             sum([acc.balance for acc in asset_accounts])
+
+    # 3️⃣ Investing = Loans disbursed (negative) and investments posted
+    investing_accounts = SaccoAccount.query.filter(
+        SaccoAccount.account_number.like('M000GL_INVEST%')
+    ).all()
+
+    investing_cashflow = sum([acc.balance for acc in investing_accounts])
+
+    # 4️⃣ Financing = Savings deposits (positive) - withdrawals (negative)
+    savings_control = SaccoAccount.query.filter_by(account_number='M000GL_SAVINGS').first()
+    financing_cashflow = savings_control.balance if savings_control else 0
+
+    # 5️⃣ Total Cash Flow
+    net_cashflow = net_income + working_capital_change + investing_cashflow + financing_cashflow
+
+    # 6️⃣ Ending cash balance
+    cash_account = SaccoAccount.query.filter_by(account_number='M000GL_CASH').first()
+    ending_cash = cash_account.balance if cash_account else Decimal('0.00')
+
+    return render_template(
+        "admin/cashflow_statement.html",
+        net_income=net_income,
+        working_capital_change=working_capital_change,
+        investing_cashflow=investing_cashflow,
+        financing_cashflow=financing_cashflow,
+        net_cashflow=net_cashflow,
+        ending_cash=ending_cash
+    )
+
+
+## GL-Reports
+
+@admin_bp.route('/reports/gl', methods=['GET', 'POST'])
+@login_required
+def gl_report():
+    """
+    Generates GL Drill-down report for any SaccoAccount.
+    """
+    from sacco_app.models import SaccoAccount, Transaction
+
+    accounts = SaccoAccount.query.all()
+    transactions = []
+    selected_acc = None
+
+    if request.method == 'POST':
+        acc_no = request.form.get('account_no')
+        selected_acc = SaccoAccount.query.filter_by(account_number=acc_no).first()
+
+        transactions = Transaction.query.filter_by(account_no=acc_no)\
+                                        .order_by(Transaction.created_at)\
+                                        .all()
+
+    return render_template(
+        "admin/gl_report.html",
+        accounts=accounts,
+        selected_acc=selected_acc,
+        transactions=transactions
     )
