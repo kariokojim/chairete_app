@@ -1,0 +1,128 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div class="container-fluid mt-4">
+  <h2 class="mb-4 fw-bold text-primary">Admin Dashboard</h2>
+
+  <!-- Beautiful Summary Cards -->
+  <div class="row g-4">
+    <!-- Members -->
+    <div class="col-md-3 col-sm-6">
+      <div class="card shadow-lg border-0 text-center dashboard-card" style="background: linear-gradient(135deg, #e3f2fd, #bbdefb);">
+        <div class="card-body py-4">
+          <div class="display-6 mb-2">👥</div>
+          <h5 class="fw-bold text-primary">Members</h5>
+          <h3 class="fw-bold text-dark mb-0">{{ total_members or 0 }}</h3>
+          <small class="text-muted">Active Members</small>
+        </div>
+      </div>
+    </div>
+
+    <!-- Savings -->
+    <div class="col-md-3 col-sm-6">
+      <div class="card shadow-lg border-0 text-center dashboard-card" style="background: linear-gradient(135deg, #e8f5e9, #c8e6c9);">
+        <div class="card-body py-4">
+          <div class="display-6 mb-2">💰</div>
+          <h5 class="fw-bold text-success">Total Savings</h5>
+          <h3 class="fw-bold text-dark mb-0">{{ total_savings or 0 }}</h3>
+          <small class="text-muted">KSh</small>
+        </div>
+      </div>
+    </div>
+
+    <!-- Loans -->
+    <div class="col-md-3 col-sm-6">
+      <div class="card shadow-lg border-0 text-center dashboard-card" style="background: linear-gradient(135deg, #ffebee, #ffcdd2);">
+        <div class="card-body py-4">
+          <div class="display-6 mb-2">🏦</div>
+          <h5 class="fw-bold text-danger">Total Loans</h5>
+          <h3 class="fw-bold text-dark mb-0">{{ total_loans or 0 }}</h3>
+          <small class="text-muted">Outstanding</small>
+        </div>
+      </div>
+    </div>
+
+    <!-- Share Capital -->
+    <div class="col-md-3 col-sm-6">
+      <div class="card shadow-lg border-0 text-center dashboard-card" style="background: linear-gradient(135deg, #fff8e1, #ffe082);">
+        <div class="card-body py-4">
+          <div class="display-6 mb-2">💼</div>
+          <h5 class="fw-bold text-warning">Share Capital</h5>
+          <h3 class="fw-bold text-dark mb-0">{{ total_share_capital or 0 }}</h3>
+          <small class="text-muted">KSh</small>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Charts Section -->
+  <div class="row mt-5">
+    <div class="col-md-8">
+      <div class="card shadow-sm border-0">
+        <div class="card-body">
+          <h5 class="card-title fw-bold mb-3">📈 Monthly Deposits vs Loans</h5>
+          <canvas id="financeChart"></canvas>
+        </div>
+      </div>
+    </div>
+
+    <div class="col-md-4">
+      <div class="card shadow-sm border-0">
+        <div class="card-body">
+          <h5 class="card-title fw-bold mb-3">Loan Portfolio Overview</h5>
+          <canvas id="loanChart"></canvas>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Chart.js Script -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script>
+  // Line Chart: Deposits vs Loans
+  const ctx = document.getElementById('financeChart').getContext('2d');
+  new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels: ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun'],
+      datasets: [
+        {
+          label: 'Deposits (KSh)',
+          data: [120000, 135000, 150000, 165000, 180000, 210000],
+          borderColor: '#007bff',
+          tension: 0.3
+        },
+        {
+          label: 'Loans (KSh)',
+          data: [80000, 95000, 110000, 125000, 130000, 150000],
+          borderColor: '#dc3545',
+          tension: 0.3
+        }
+      ]
+    },
+    options: {
+      responsive: true,
+      plugins: { legend: { position: 'bottom' } }
+    }
+  });
+
+  // Pie Chart: Loan Portfolio
+  const ctx2 = document.getElementById('loanChart').getContext('2d');
+  new Chart(ctx2, {
+    type: 'pie',
+    data: {
+      labels: ['Cleared Loans', 'Active Loans', 'Defaulted'],
+      datasets: [{
+        data: [40, 50, 10],
+        backgroundColor: ['#28a745', '#ffc107', '#dc3545']
+      }]
+    },
+    options: {
+      responsive: true,
+      plugins: { legend: { position: 'bottom' } }
+    }
+  });
+</script>
+
+{% endblock %}
