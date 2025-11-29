@@ -2,7 +2,7 @@ from flask import Blueprint, render_template, redirect, url_for, flash, request,
 from flask_login import login_required,current_user
 from datetime import datetime, timedelta
 from sacco_app.extensions import db,csrf
-from sacco_app.models import User,Member,generate_account_number,SaccoAccount,Transaction, Loan,LoanGuarantor, LoanSchedule, LoanInterest
+from sacco_app.models import User,Member,generate_account_number,SaccoAccount,Transaction, Loan,LoanGuarantor, LoanSchedule, LoanInterest,AuditLog
 from sacco_app.forms import UserForm,AddMemberForm,LoanRepaymentForm,OpenAccountForm,PaymentPostingForm,LoanDisbursementForm,GuarantorForm,MemberDepositSearchForm
 from werkzeug.security import generate_password_hash
 from sacco_app.utils.transactions import post_savings
@@ -42,33 +42,31 @@ def list_users():
 @admin_bp.route('/users/create', methods=['GET', 'POST'])
 @login_required
 def create_user():
-
-    if not role_required_admin():
-        return 'forbidden', 403
     form = UserForm()
-    if request.method == 'POST':
-        username = request.form.get('username')
-        email = request.form.get('email')
-        password = request.form.get('password')
-        role = request.form.get('role')
 
-        if not (username and email and password and role):
-            return jsonify({"error": "All fields are required"}), 400
+    if form.validate_on_submit():
+        username = form.username.data.strip()
+        email = form.email.data.strip()
+        password = form.password.data.strip()
+        role = form.role.data
 
-        if User.query.filter_by(username=username).first():
-            return jsonify({"error": "Username already exists"}), 400
+        # extra backend validation
+        if not username or not email or not password:
+            flash("All fields are required.", "danger")
+            return redirect(url_for('admin.create_user'))
 
-        new_user = User(
-            username=username,
-            email=email,
-            role=role,
-            password_hash=generate_password_hash(password)
-        )
-        db.session.add(new_user)
+        # create the user
+        user = User(username=username, email=email, role=role)
+        user.set_password(password)
+
+        db.session.add(user)
         db.session.commit()
-        return jsonify({"success": True, "message": "User created successfully!"})
 
-    return render_template('admin/create_user.html',form=form)
+        flash("User created successfully!", "success")
+        return redirect(url_for('admin.list_users'))  # redirect anywhere you want
+
+    # Render the form if GET or validation failed
+    return render_template("admin/create_user.html", form=form)
 
 ##generate or add new member
 def generate_member_no():
@@ -1231,120 +1229,140 @@ def upload_loan_repayments():
         return render_template('admin/upload_results.html', failed_rows=failed_rows, success_count=success_count)
 
     return render_template('admin/upload_loan_repayments.html', form=form)
-
+    
+    
+    #dashboardrds
 @admin_bp.route('/dashboard')
 @login_required
 def dashboard():
     """Admin dashboard summary."""
     from sacco_app.models import Member, SaccoAccount, Loan, LoanSchedule
-    from sqlalchemy import func
-    from datetime import date
+    from sqlalchemy import func, or_, text
+    from datetime import date, timedelta
 
-    # --- 1️⃣ Total members
+    # Helper to format money
+    def fmt(n):
+        return f"{float(n or 0):,.2f}"
+
+    # ----------------------------
+    # 1. TOTAL MEMBERS
+    # ----------------------------
     total_members = Member.query.count()
 
-    # --- 2️⃣ Total savings (Deposits)
+    # ----------------------------
+    # 2. TOTAL SAVINGS
+    # ----------------------------
     total_savings = db.session.query(
         func.coalesce(func.sum(SaccoAccount.balance), 0)
-    ).filter(SaccoAccount.account_type == 'SAVINGS',SaccoAccount.account_number != 'M000GL_SAVINGS').scalar()
+    ).filter(
+        SaccoAccount.account_type == 'SAVINGS',
+        SaccoAccount.account_number != 'M000GL_SAVINGS'
+    ).scalar()
 
-    # --- 3️⃣ Total share capital
+    # ----------------------------
+    # 3. TOTAL SHARE CAPITAL
+    # ----------------------------
     total_share_capital = db.session.query(
         func.coalesce(func.sum(SaccoAccount.balance), 0)
     ).filter(SaccoAccount.account_type == 'SHARE_CAPITAL').scalar()
 
-    # --- 4️⃣ Total active loans (outstanding principal)
+    # ----------------------------
+    # 4. TOTAL LOANS OUTSTANDING
+    # ----------------------------
     total_loans = db.session.query(
         func.coalesce(func.sum(Loan.balance), 0)
-    ).filter(Loan.status.in_(['Active', 'Disbursed'])).scalar()
+    ).filter(
+        Loan.status.in_(['Active', 'Disbursed'])
+    ).scalar()
 
-    # --- 5️⃣ Total loans in arrears
-    # Sum of all unpaid principal + interest on schedules where due_date < today
-    total_arrears = db.session.query(
+    # ----------------------------
+    # 5. MEMBERS WITH ZERO SAVINGS BALANCE
+    # ----------------------------
+    members_zero_balance = db.session.execute(
+        text("""
+            SELECT COUNT(*) FROM (
+                SELECT m.member_no, COALESCE(SUM(s.balance), 0) AS bal
+                FROM members m
+                LEFT JOIN sacco_accounts s 
+                    ON m.member_no = s.member_no 
+                    AND s.account_type = 'SAVINGS'
+                GROUP BY m.member_no
+                HAVING COALESCE(SUM(s.balance), 0) = 0
+            ) x;
+        """)
+    ).scalar()
+
+    # ----------------------------
+    # 6. INSTALLMENT DUE THIS MONTH
+    # ----------------------------
+    installment_due = db.session.query(
         func.coalesce(func.sum(
             (LoanSchedule.principal_due - LoanSchedule.principal_paid) +
             (LoanSchedule.interest_due - LoanSchedule.interest_paid)
+        ), 0)
+    ).filter(
+        func.date_trunc('month', LoanSchedule.due_date) ==
+        func.date_trunc('month', date.today()),
+        LoanSchedule.status != 'PAID'
+    ).scalar()
+
+    # ----------------------------
+    # 7. PRINCIPAL ARREARS (OVERDUE)
+    # ----------------------------
+    principal_arrears = db.session.query(
+        func.coalesce(func.sum(
+            LoanSchedule.principal_due - LoanSchedule.principal_paid
         ), 0)
     ).filter(
         LoanSchedule.due_date < date.today(),
         LoanSchedule.status != 'PAID'
     ).scalar()
 
-    # Optional: Total investments if you track them separately
-    total_investments = db.session.query(
-        func.coalesce(func.sum(SaccoAccount.balance), 0)
-    ).filter(SaccoAccount.account_type == 'INVESTMENT').scalar()
+    # ----------------------------
+    # 8. INTEREST ARREARS (OVERDUE)
+    # ----------------------------
+    interest_arrears = db.session.query(
+        func.coalesce(func.sum(
+            LoanSchedule.interest_due - LoanSchedule.interest_paid
+        ), 0)
+    ).filter(
+        LoanSchedule.due_date < date.today(),
+        LoanSchedule.status != 'PAID'
+    ).scalar()
 
-    # Format numbers with commas
-    def fmt(n): 
-        return f"{float(n):,.2f}"
+    # ----------------------------
+    # 9. LOANS NOT PAID IN LAST 2 MONTHS (Using loan_no)
+    # ----------------------------
+    two_months_ago = date.today() - timedelta(days=60)
 
+    recent_paid_loans = db.session.query(LoanSchedule.loan_no).filter(
+        LoanSchedule.due_date >= two_months_ago,
+        or_(LoanSchedule.principal_paid > 0, LoanSchedule.interest_paid > 0)
+    ).distinct()
+
+    loans_not_paid_2_months = db.session.query(Loan.loan_no).filter(
+        Loan.status.in_(['Active', 'Disbursed']),
+        ~Loan.loan_no.in_(recent_paid_loans)
+    ).count()
+
+    # ----------------------------
+    # SEND ALL TO TEMPLATE
+    # ----------------------------
     return render_template(
         'admin/dashboard.html',
         total_members=total_members,
         total_savings=fmt(total_savings),
         total_share_capital=fmt(total_share_capital),
         total_loans=fmt(total_loans),
-        total_arrears=fmt(total_arrears),
-        total_investments=fmt(total_investments)
+
+        members_zero_balance=members_zero_balance,
+        installment_due=fmt(installment_due),
+
+        principal_arrears=fmt(principal_arrears),
+        interest_arrears=fmt(interest_arrears),
+
+        loans_not_paid_2_months=loans_not_paid_2_months,
     )
-
-#line graph
-
-@admin_bp.route('/api/dashboard_data')
-@login_required
-def api_dashboard_data():
-    """Return monthly deposit and loan disbursement totals for dashboard chart."""
-    from sacco_app.models import Transaction
-    from sqlalchemy import func, extract
-    from datetime import datetime
-    import calendar
-
-    current_year = datetime.now().year
-
-    # --- Deposits (SAVINGS credits)
-    deposits = (
-        db.session.query(
-            extract('month', Transaction.bank_txn_date).label('month'),
-            func.sum(Transaction.credit_amount).label('total')
-        )
-        .filter(
-            Transaction.gl_account == 'SAVINGS',
-            extract('year', Transaction.bank_txn_date) == current_year
-        )
-        .group_by('month')
-        .order_by('month')
-        .all()
-    )
-
-    # --- Loans (MEMBER_LOAN debits)
-    loans = (
-        db.session.query(
-            extract('month', Transaction.bank_txn_date).label('month'),
-            func.sum(Transaction.debit_amount).label('total')
-        )
-        .filter(
-            Transaction.gl_account == 'MEMBER_LOAN',
-            extract('year', Transaction.bank_txn_date) == current_year
-        )
-        .group_by('month')
-        .order_by('month')
-        .all()
-    )
-
-    # Convert to dict for easy mapping
-    deposits_dict = {int(m): float(t) for m, t in deposits}
-    loans_dict = {int(m): float(t) for m, t in loans}
-
-    labels = [calendar.month_abbr[m] for m in range(1, 13)]
-    deposits_data = [deposits_dict.get(m, 0) for m in range(1, 12 + 1)]
-    loans_data = [loans_dict.get(m, 0) for m in range(1, 12 + 1)]
-
-    return {
-        "labels": labels,
-        "deposits": deposits_data,
-        "loans": loans_data
-    }
 
 # ---------- Savings Statement (PDF) ----------
 @admin_bp.route('/reports/savings-statement', methods=['GET'])
@@ -2491,4 +2509,67 @@ def gl_report():
         accounts=accounts,
         selected_acc=selected_acc,
         transactions=transactions
+    )
+
+
+#### auditing
+def log_activity(action, details=None):
+    from flask import request
+    from sacco_app.models import AuditLog
+
+    ip = request.remote_addr
+    
+    log = AuditLog(
+        user_id=current_user.id,
+        action=action,
+        details=details,
+        ip_address=ip
+    )
+    db.session.add(log)
+    db.session.commit()
+
+
+@admin_bp.route('/audit_logs')
+@login_required
+def audit_logs():
+    logs = AuditLog.query.order_by(AuditLog.timestamp.desc()).all()
+    return render_template("admin/audit_logs.html", logs=logs)
+
+
+from openpyxl import Workbook
+from flask import send_file
+import io
+
+@admin_bp.route('/export_audit_logs')
+@login_required
+def export_audit_logs():
+    logs = AuditLog.query.order_by(AuditLog.timestamp.desc()).all()
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Audit Logs"
+
+    # Headers
+    ws.append(["User", "Action", "Details", "IP Address", "Timestamp"])
+
+    # Data rows
+    for log in logs:
+        ws.append([
+            log.user.username if log.user else "SYSTEM",
+            log.action,
+            log.details,
+            log.ip_address,
+            log.timestamp.strftime("%Y-%m-%d %H:%M:%S")
+        ])
+
+    # Save to memory
+    stream = io.BytesIO()
+    wb.save(stream)
+    stream.seek(0)
+
+    return send_file(
+        stream,
+        as_attachment=True,
+        download_name="audit_logs.xlsx",
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
