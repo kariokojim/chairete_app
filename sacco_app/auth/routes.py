@@ -30,7 +30,6 @@ def logout():
     session.pop('_flashes', None)
 
     logout_user()
-    flash('You have been logged out.', 'info')
     from sacco_app.forms import LoginForm  # ✅ import inside if needed
     form = LoginForm()                     # ✅ create a fresh form instance
     return render_template('auth/login.html', form=form)
