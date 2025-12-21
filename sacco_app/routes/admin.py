@@ -20,6 +20,8 @@ from werkzeug.utils import secure_filename
 import os
 from datetime import datetime
 from flask import current_app
+from sqlalchemy import text   
+
 
 def role_required_admin():
     return current_user.is_authenticated and current_user.role == 'admin'
@@ -1020,11 +1022,11 @@ def loan_repayment():
         from sacco_app.utils.transactions import process_loan_repayment
         try:
             process_loan_repayment(member_no, amount, narration, bank_txn_date, current_user.username)
-            flash(f"Loan repayment of {amount} for {member_no} posted successfully.", "success")
+            flash(f"Member posting of {amount} for {member_no} posted successfully.", "success")
             return redirect(url_for('admin.loan_repayment'))
         except Exception as e:
             db.session.rollback()
-            flash(f"Error posting repayment: {str(e)}", "danger")
+            flash(f"Error posting : {str(e)}", "danger")
 
     return render_template('admin/loan_repayment.html', form=form)
 #LOAN PREPAYMENT
@@ -1062,174 +1064,410 @@ def loan_prepayment():
 @admin_bp.route('/upload_loan_repayments', methods=['GET', 'POST'])
 @login_required
 def upload_loan_repayments():
-    from sacco_app.forms import UploadMemberSavingsForm  # reuse same form
+    """
+    FINAL SACCO LOGIC:
+    - No Cash account
+    - Evaluate only overdue schedules (due_date < today)
+    - Pay INTEREST → PRINCIPAL → remainder to SAVINGS
+    - Post entries:
+        DR MEMBER_INTEREST    CR M000GL_LN_INT
+        DR MEMBER_LOAN        CR M000GL_LOAN
+        DR MEMBER_SAVINGS     CR M000GL_SAVINGS
+    - Update sacco_accounts.balance every leg
+    - Update Transaction.running_balance every leg
+    """
+    from sacco_app.forms import UploadMemberSavingsForm
+    from decimal import Decimal, InvalidOperation
+    from datetime import datetime, date
+    import pandas as pd
     import uuid
-    from decimal import Decimal
-    from datetime import datetime
 
-    form = UploadMemberSavingsForm()  # same form: single file upload
+    form = UploadMemberSavingsForm()
+
+    # --- Helpers -------------------------------------------------------------
+
+    def ensure_savings(member_no):
+        acc = SaccoAccount.query.filter_by(member_no=member_no, account_type="SAVINGS").first()
+        if not acc:
+            acc = SaccoAccount(
+                member_no=member_no,
+                account_number=f"{member_no}_SAVINGS",
+                account_type="SAVINGS",
+                balance=Decimal("0.00"),
+                limit=Decimal("1000000"),
+                status="active",
+                created_at=datetime.utcnow(),
+                updated_at=datetime.utcnow(),
+                created_by=current_user.username
+            )
+            db.session.add(acc)
+            db.session.flush()
+        return acc
+
+    def ensure_loan_ledgers(member_no):
+        """Create LOAN and INTEREST member ledgers only if an active loan exists."""
+        loan_acc = SaccoAccount.query.filter_by(member_no=member_no, account_type="LOAN").first()
+        if not loan_acc:
+            loan_acc = SaccoAccount(
+                member_no=member_no,
+                account_number=f"{member_no}_LOAN",
+                account_type="LOAN",
+                balance=Decimal("0.00"),
+                limit=Decimal("1000000"),
+                status="active",
+                created_at=datetime.utcnow(),
+                updated_at=datetime.utcnow(),
+                created_by=current_user.username
+            )
+            db.session.add(loan_acc)
+            db.session.flush()
+
+        int_acc = SaccoAccount.query.filter_by(member_no=member_no, account_type="INTEREST").first()
+        if not int_acc:
+            int_acc = SaccoAccount(
+                member_no=member_no,
+                account_number=f"{member_no}_INTEREST",
+                account_type="INTEREST",
+                balance=Decimal("0.00"),
+                limit=Decimal("0"),
+                status="active",
+                created_at=datetime.utcnow(),
+                updated_at=datetime.utcnow(),
+                created_by=current_user.username
+            )
+            db.session.add(int_acc)
+            db.session.flush()
+
+        return loan_acc, int_acc
+
+    # --- Main processing -----------------------------------------------------
 
     if form.validate_on_submit():
         file = form.file.data
-        if not file:
-            flash("Please select an Excel (.xlsx) file to upload.", "danger")
+        try:
+            df = pd.read_excel(file)
+        except:
+            flash("Invalid Excel file.", "danger")
             return redirect(url_for('admin.upload_loan_repayments'))
 
-        df = pd.read_excel(file)
-        required_cols = {'bank_txn_date', 'credit_amount', 'narration', 'member_no'}
-        if not required_cols.issubset(df.columns):
-            flash(f"Missing required columns. Expected: {', '.join(required_cols)}", "danger")
+        required = {"member_no", "credit_amount", "narration", "bank_txn_date"}
+        if not required.issubset(df.columns):
+            flash("Missing required columns.", "danger")
             return redirect(url_for('admin.upload_loan_repayments'))
 
-        success_count = 0
-        failed_rows = []
+        # GLs (confirmed)
+        gl_savings = SaccoAccount.query.filter_by(account_number="M000GL_SAVINGS").first()
+        gl_loan = SaccoAccount.query.filter_by(account_number="M000GL_LOAN").first()
+        gl_interest = SaccoAccount.query.filter_by(account_number="M000GL_LN_INT").first()
 
-        for i, row in df.iterrows():
-            member_no = str(row.get('member_no')).strip()
-            narration = str(row.get('narration', '')).strip()
-            bank_txn_date = row.get('bank_txn_date')
-            credit_amount = Decimal(row.get('credit_amount', 0) or 0)
+        success = 0
+        failed = []
 
+        for idx, row in df.iterrows():
             try:
+                # Get row values
+                member_no = str(row["member_no"]).strip()
+                narration = str(row["narration"] or "")
+                try:
+                    amount = Decimal(row["credit_amount"] or 0)
+                except:
+                    raise Exception("Invalid amount")
+
+                if pd.isna(row["bank_txn_date"]):
+                    txn_date = datetime.utcnow()
+                else:
+                    txn_date = pd.to_datetime(row["bank_txn_date"]).to_pydatetime()
+
                 member = Member.query.filter_by(member_no=member_no).first()
                 if not member:
-                    failed_rows.append({'row': i+1, 'member_no': member_no, 'error': 'Member not found'})
+                    raise Exception("Member not found")
+
+                remaining = amount
+                txn_ref = f"UP{uuid.uuid4().hex[:10].upper()}"
+
+                # Ensure savings ledger exists
+                m_savings = ensure_savings(member_no)
+
+                # Check for active loan
+                loan = Loan.query.filter_by(member_no=member_no, status="Active").first()
+
+                # ----------------------------------------------------------------------
+                # CASE 1: MEMBER HAS NO ACTIVE LOAN → full amount goes to savings
+                # ----------------------------------------------------------------------
+                if not loan:
+                    with db.session.no_autoflush:
+                        # Debit member savings
+                        m_savings.balance += remaining
+                        db.session.add(m_savings)
+
+                        db.session.add(Transaction(
+                            txn_no=f"TXN{uuid.uuid4().hex[:12].upper()}",
+                            member_no=member_no,
+                            account_no=m_savings.account_number,
+                            gl_account="SAVINGS",
+                            tran_type="LIABILITY",
+                            debit_amount=Decimal("0"),
+                            credit_amount=remaining,
+                            running_balance=m_savings.balance,
+                            reference=txn_ref,
+                            narration=f"Savings deposit (no loan) - {narration}",
+                            bank_txn_date=txn_date,
+                            posted_by=current_user.username
+                        ))
+
+                        # Credit savings control
+                        gl_savings.balance += remaining
+                        db.session.add(gl_savings)
+
+                        db.session.add(Transaction(
+                            txn_no=f"TXN{uuid.uuid4().hex[:12].upper()}",
+                            member_no="M000GL",
+                            account_no=gl_savings.account_number,
+                            gl_account="SAVINGS_CONTROL",
+                            tran_type="LIABILITY",
+                            debit_amount=Decimal("0"),
+                            credit_amount=remaining,
+                            running_balance=gl_savings.balance,
+                            reference=txn_ref,
+                            narration=f"Savings control credit - {narration}",
+                            bank_txn_date=txn_date,
+                            posted_by=current_user.username
+                        ))
+
+                    db.session.commit()
+                    success += 1
                     continue
 
-                txn_date = pd.to_datetime(bank_txn_date).to_pydatetime() if pd.notnull(bank_txn_date) else datetime.now()
+                # ----------------------------------------------------------------------
+                # CASE 2: MEMBER HAS ACTIVE LOAN → PAY DUE INTEREST, THEN PRINCIPAL
+                # ----------------------------------------------------------------------
 
-                # Get accounts
-                member_savings_acc = SaccoAccount.query.filter_by(member_no=member_no, account_type='SAVINGS').first()
-                gl_cash = SaccoAccount.query.filter_by(account_number='M000GL_CASH').first()
-                gl_loan_control = SaccoAccount.query.filter_by(account_number='M000GL_LOAN').first()
-                gl_interest_income = SaccoAccount.query.filter_by(account_number='M000GL_LN_INT').first()
-                gl_savings_ctrl = SaccoAccount.query.filter_by(account_number='M000GL_SAVINGS').first()
+                # Ensure loan & interest ledgers exist
+                m_loan, m_interest = ensure_loan_ledgers(member_no)
 
-                loan = Loan.query.filter_by(member_no=member_no, status='Active').first()
+                # Fetch only overdue schedules
+                schedules = LoanSchedule.query.filter(
+                    LoanSchedule.loan_no == loan.loan_no,
+                    LoanSchedule.status.in_(["DUE", "PARTIAL"]),
+                    LoanSchedule.due_date < date.today()
+                ).order_by(LoanSchedule.due_date.asc()).all()
 
-                remaining = credit_amount
-                txn_ref = f"TXN{uuid.uuid4().hex[:10].upper()}"
+                # If no dues → full amount to savings
+                if not schedules:
+                    with db.session.no_autoflush:
+                        m_savings.balance += remaining
+                        db.session.add(m_savings)
 
-                # 1️⃣ Debit Cash (money in)
-                gl_cash.balance += credit_amount
-                db.session.add(Transaction(
-                    txn_no=txn_ref,
-                    member_no=member_no,
-                    account_no=gl_cash.account_number,
-                    gl_account='CASH',
-                    tran_type='ASSET',
-                    debit_amount=credit_amount,
-                    credit_amount=Decimal('0'),
-                    reference=txn_ref,
-                    narration=f"Loan repayment from {member_no} - {narration}",
-                    bank_txn_date=txn_date,
-                    posted_by=current_user.username,
-                    running_balance=gl_cash.balance
-                ))
+                        db.session.add(Transaction(
+                            txn_no=f"TXN{uuid.uuid4().hex[:12].upper()}",
+                            member_no=member_no,
+                            account_no=m_savings.account_number,
+                            gl_account="SAVINGS",
+                            tran_type="LIABILITY",
+                            debit_amount=Decimal("0"),
+                            credit_amount=remaining,
+                            running_balance=m_savings.balance,
+                            reference=txn_ref,
+                            narration=f"Savings deposit (no overdue) - {narration}",
+                            bank_txn_date=txn_date,
+                            posted_by=current_user.username
+                        ))
 
-                # If member has an active loan, apply interest and principal
-                if loan:
-                    schedules = LoanSchedule.query.filter(
-                        LoanSchedule.loan_no == loan.loan_no,
-                        LoanSchedule.status.in_(['DUE', 'PARTIAL'])
-                    ).order_by(LoanSchedule.installment_no).all()
+                        gl_savings.balance += remaining
+                        db.session.add(gl_savings)
 
-                    for sched in schedules:
-                        if remaining <= 0:
-                            break
+                        db.session.add(Transaction(
+                            txn_no=f"TXN{uuid.uuid4().hex[:12].upper()}",
+                            member_no="M000GL",
+                            account_no=gl_savings.account_number,
+                            gl_account="SAVINGS_CONTROL",
+                            tran_type="LIABILITY",
+                            debit_amount=Decimal("0"),
+                            credit_amount=remaining,
+                            running_balance=gl_savings.balance,
+                            reference=txn_ref,
+                            narration=f"Savings control credit",
+                            bank_txn_date=txn_date,
+                            posted_by=current_user.username
+                        ))
 
-                        # --- Pay interest first
-                        interest_due = sched.interest_due - sched.interest_paid
-                        if remaining > 0 and interest_due > 0:
-                            pay_interest = min(remaining, interest_due)
-                            sched.interest_paid += pay_interest
-                            remaining -= pay_interest
+                    db.session.commit()
+                    success += 1
+                    continue
 
-                            # GL: Interest income
-                            gl_interest_income.balance += pay_interest
+                # ----------------------------------------------------------------------
+                # Apply each overdue schedule
+                # ----------------------------------------------------------------------
+                for sched in schedules:
+                    if remaining <= 0:
+                        break
+
+                    # Compute due interest/principal
+                    int_due = (Decimal(sched.interest_due or 0) -
+                               Decimal(sched.interest_paid or 0))
+                    prin_due = (Decimal(sched.principal_due or 0) -
+                                Decimal(sched.principal_paid or 0))
+
+                    # --- 1) PAY INTEREST ---
+                    if int_due > 0 and remaining > 0:
+                        pay = min(remaining, int_due)
+                        sched.interest_paid += pay
+                        remaining -= pay
+
+                        with db.session.no_autoflush:
+                            # DR MEMBER_INTEREST
+                            m_interest.balance -= pay
+                            db.session.add(m_interest)
                             db.session.add(Transaction(
-                                txn_no=f"TXN{uuid.uuid4().hex[:10].upper()}",
-                                member_no='M000GL',
-                                account_no=gl_interest_income.account_number,
-                                gl_account='INTEREST_INCOME',
-                                tran_type='INCOME',
-                                debit_amount=Decimal('0'),
-                                credit_amount=pay_interest,
+                                txn_no=f"TXN{uuid.uuid4().hex[:12].upper()}",
+                                member_no=member_no,
+                                account_no=m_interest.account_number,
+                                gl_account="MEMBER_INTEREST",
+                                tran_type="ASSET",
+                                debit_amount=pay,
+                                credit_amount=Decimal("0"),
+                                running_balance=m_interest.balance,
                                 reference=txn_ref,
-                                narration=f"Interest income - {member_no}",
+                                narration=f"Interest paid - {narration}",
                                 bank_txn_date=txn_date,
-                                posted_by=current_user.username,
-                                running_balance=gl_interest_income.balance
+                                posted_by=current_user.username
                             ))
 
-                        # --- Then principal
-                        principal_due = sched.principal_due - sched.principal_paid
-                        if remaining > 0 and principal_due > 0:
-                            pay_principal = min(remaining, principal_due)
-                            sched.principal_paid += pay_principal
-                            loan.balance -= pay_principal
-                            remaining -= pay_principal
-
-                            # GL: Loan control decrease
-                            gl_loan_control.balance -= pay_principal
+                            # CR INTEREST CONTROL
+                            gl_interest.balance += pay
+                            db.session.add(gl_interest)
                             db.session.add(Transaction(
-                                txn_no=f"TXN{uuid.uuid4().hex[:10].upper()}",
-                                member_no='M000GL',
-                                account_no=gl_loan_control.account_number,
-                                gl_account='LOAN_CONTROL',
-                                tran_type='ASSET',
-                                debit_amount=Decimal('0'),
-                                credit_amount=pay_principal,
+                                txn_no=f"TXN{uuid.uuid4().hex[:12].upper()}",
+                                member_no="M000GL",
+                                account_no=gl_interest.account_number,
+                                gl_account="LOAN_INTEREST_CONTROL",
+                                tran_type="INCOME",
+                                debit_amount=Decimal("0"),
+                                credit_amount=pay,
+                                running_balance=gl_interest.balance,
                                 reference=txn_ref,
-                                narration=f"Principal repayment - {member_no}",
+                                narration=f"Interest control credit",
                                 bank_txn_date=txn_date,
-                                posted_by=current_user.username,
-                                running_balance=gl_loan_control.balance
+                                posted_by=current_user.username
                             ))
 
-                        # Update schedule status
-                        if sched.principal_paid >= sched.principal_due and sched.interest_paid >= sched.interest_due:
-                            sched.status = 'PAID'
-                        else:
-                            sched.status = 'PARTIAL'
+                    # --- 2) PAY PRINCIPAL ---
+                    if prin_due > 0 and remaining > 0:
+                        pay = min(remaining, prin_due)
+                        sched.principal_paid += pay
+                        remaining -= pay
 
-                    # If loan fully paid
-                    if loan.balance <= 0:
-                        loan.balance = Decimal('0.00')
-                        loan.status = 'Cleared'
+                        with db.session.no_autoflush:
+                            # DR MEMBER_LOAN
+                            m_loan.balance -= pay
+                            db.session.add(m_loan)
+                            db.session.add(Transaction(
+                                txn_no=f"TXN{uuid.uuid4().hex[:12].upper()}",
+                                member_no=member_no,
+                                account_no=m_loan.account_number,
+                                gl_account="MEMBER_LOAN",
+                                tran_type="ASSET",
+                                debit_amount=pay,
+                                credit_amount=Decimal("0"),
+                                running_balance=m_loan.balance,
+                                reference=txn_ref,
+                                narration=f"Principal paid - {narration}",
+                                bank_txn_date=txn_date,
+                                posted_by=current_user.username
+                            ))
 
-                # 2️⃣ Remaining → savings
+                            # CR LOAN CONTROL
+                            gl_loan.balance -= pay
+                            db.session.add(gl_loan)
+                            db.session.add(Transaction(
+                                txn_no=f"TXN{uuid.uuid4().hex[:12].upper()}",
+                                member_no="M000GL",
+                                account_no=gl_loan.account_number,
+                                gl_account="LOAN_CONTROL",
+                                tran_type="ASSET",
+                                debit_amount=Decimal("0"),
+                                credit_amount=pay,
+                                running_balance=gl_loan.balance,
+                                reference=txn_ref,
+                                narration=f"Loan control credit",
+                                bank_txn_date=txn_date,
+                                posted_by=current_user.username
+                            ))
+
+                    # update schedule status
+                    if (sched.interest_paid >= sched.interest_due and
+                        sched.principal_paid >= sched.principal_due):
+                        sched.status = "PAID"
+                    else:
+                        sched.status = "PARTIAL"
+
+                # Update loan from member loan ledger
+                loan.balance = m_loan.balance
+                if loan.balance <= 0:
+                    loan.balance = Decimal("0")
+                    loan.status = "Cleared"
+
+                # ----------------------------------------------------------------------
+                # REMAINDER → SAVINGS
+                # ----------------------------------------------------------------------
                 if remaining > 0:
-                    member_savings_acc.balance += remaining
-                    gl_savings_ctrl.balance += remaining
+                    with db.session.no_autoflush:
+                        # DR MEMBER_SAVINGS
+                        m_savings.balance += remaining
+                        db.session.add(m_savings)
+                        db.session.add(Transaction(
+                            txn_no=f"TXN{uuid.uuid4().hex[:12].upper()}",
+                            member_no=member_no,
+                            account_no=m_savings.account_number,
+                            gl_account="SAVINGS",
+                            tran_type="LIABILITY",
+                            debit_amount=Decimal("0"),
+                            credit_amount=remaining,
+                            running_balance=m_savings.balance,
+                            reference=txn_ref,
+                            narration=f"Remainder to savings - {narration}",
+                            bank_txn_date=txn_date,
+                            posted_by=current_user.username
+                        ))
 
-                    db.session.add(Transaction(
-                        txn_no=f"TXN{uuid.uuid4().hex[:10].upper()}",
-                        member_no=member_no,
-                        account_no=member_savings_acc.account_number,
-                        gl_account='SAVINGS',
-                        tran_type='SAVINGS',
-                        debit_amount=Decimal('0'),
-                        credit_amount=remaining,
-                        reference=txn_ref,
-                        narration=f"Excess to savings - {narration}",
-                        bank_txn_date=txn_date,
-                        posted_by=current_user.username,
-                        running_balance=member_savings_acc.balance
-                    ))
+                        # CR SAVINGS CONTROL
+                        gl_savings.balance += remaining
+                        db.session.add(gl_savings)
+                        db.session.add(Transaction(
+                            txn_no=f"TXN{uuid.uuid4().hex[:12].upper()}",
+                            member_no="M000GL",
+                            account_no=gl_savings.account_number,
+                            gl_account="SAVINGS_CONTROL",
+                            tran_type="LIABILITY",
+                            debit_amount=Decimal("0"),
+                            credit_amount=remaining,
+                            running_balance=gl_savings.balance,
+                            reference=txn_ref,
+                            narration=f"Savings control credit",
+                            bank_txn_date=txn_date,
+                            posted_by=current_user.username
+                        ))
 
+                # FINAL COMMIT
                 db.session.commit()
-                success_count += 1
+                success += 1
 
             except Exception as e:
                 db.session.rollback()
-                failed_rows.append({'row': i+1, 'member_no': member_no, 'error': str(e)})
+                failed.append({
+                    "row": idx + 1,
+                    "member_no": row.get("member_no"),
+                    "error": str(e)
+                })
 
-        flash(f"Upload completed: {success_count} succeeded, {len(failed_rows)} failed.", 'info')
-        return render_template('admin/upload_results.html', failed_rows=failed_rows, success_count=success_count)
+        return render_template(
+            "admin/upload_results.html",
+            failed_rows=failed,
+            success_count=success
+        )
 
-    return render_template('admin/upload_loan_repayments.html', form=form)
-    
+    return render_template("admin/upload_loan_repayments.html", form=form)
+
     
     #dashboardrds
 @admin_bp.route('/dashboard')
@@ -2573,3 +2811,99 @@ def export_audit_logs():
         download_name="audit_logs.xlsx",
         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
+
+
+##loan statement view_member
+@admin_bp.route('/reports/loan-statement2', methods=['GET'])
+@login_required
+def loan_statement_form_view():
+    """Simple form to choose member and date range for loan statement"""
+    return render_template('admin/loan_statement_form_view.html')
+
+@admin_bp.route('/reports/loan-statement2', methods=['GET', 'POST'])
+@login_required
+def loan_statement_view2():
+    statement = None
+    member_no = None
+
+    if request.method == 'POST':
+        member_no = request.form.get('member_no')
+
+        sql = text("""
+                            SELECT
+                    t.account_no,
+                    t.bank_txn_date,
+                    t.narration,
+
+                    -- interest paid (display only)
+                    CASE 
+                        WHEN t.gl_account = 'MEMBER_INTEREST'
+                        THEN t.debit_amount ELSE 0
+                    END AS interest_paid,
+
+                    -- principal paid (EXCLUDE disbursement)
+                    CASE 
+                        WHEN t.gl_account = 'MEMBER_LOAN'
+                         AND COALESCE(t.credit_amount, 0) = 0   -- repayment only
+                        THEN t.debit_amount ELSE 0
+                    END AS principal_paid,
+
+                    -- loan balance (already maintained by system)
+                    CASE
+                        WHEN t.gl_account = 'MEMBER_LOAN'
+                        THEN t.running_balance
+                        ELSE NULL
+                    END AS loan_balance
+
+                FROM transactions t
+                WHERE t.member_no  =:member_no
+                  AND t.gl_account IN ('MEMBER_LOAN', 'MEMBER_INTEREST')
+                ORDER BY created_at, t.bank_txn_date, t.id asc;
+        """)
+
+        statement = db.session.execute(
+            sql, {"member_no": member_no}
+        ).fetchall()
+
+    return render_template(
+        'admin/loan_statement_form_view.html',
+        statement=statement,
+        member_no=member_no
+    )
+
+
+####### view loan schedules
+
+@admin_bp.route('/loans/member-schedules')
+@login_required
+def view_member_loan_schedules():
+    return render_template('admin/view_member_loan_schedules.html')
+    
+@admin_bp.route('/loans/member-schedules/<member_no>')
+@login_required
+def fetch_member_loan_schedules(member_no):
+    from sacco_app.models import Loan, LoanSchedule
+
+    loans = Loan.query.filter_by(member_no=member_no).all()
+    if not loans:
+        return jsonify({"error": "No loans found for this member"})
+
+    rows = []
+    for loan in loans:
+        schedules = LoanSchedule.query.filter_by(
+            loan_no=loan.loan_no
+        ).order_by(LoanSchedule.installment_no).all()
+
+        for s in schedules:
+            rows.append({
+                "loan_no": loan.loan_no,
+                "installment_no": s.installment_no,
+                "due_date": s.due_date.strftime('%Y-%m-%d'),
+                "principal_due": float(s.principal_due),
+                "principal_paid": float(s.principal_paid),
+                "interest_due": float(s.interest_due),
+                "interest_paid": float(s.interest_paid),
+                "status": s.status
+            })
+
+    return jsonify({"schedules": rows})
