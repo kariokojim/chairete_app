@@ -45,156 +45,146 @@
     <!-- Sidebar -->
     <div id="sidebar" class="bg-light border-end position-fixed h-100 p-3">
       <ul class="nav flex-column">
-		<li class="nav-item"><a class="nav-link" href="{{ url_for('admin.dashboard') }}">🏠 Dashboard</a></li>
-		<li class="nav-item">
-		<a class="nav-link" data-bs-toggle="collapse" href="#userSubMenu" role="button" aria-expanded="false" aria-controls="userSubMenu">
-		<i class="bi bi-people"></i> User Management
-		</a>
-		<div class="collapse" id="userSubMenu">
-			<ul class="nav flex-column ms-3">
-			<li class="nav-item">
-          <a class="nav-link" href="{{ url_for('admin.create_user') }}">Create User</a>
-			</li>
-			<li class="nav-item">
-          <a class="nav-link" href="{{ url_for('admin.list_users') }}">List Users</a>
-			</li>
-			</ul>
-			</div>
-		</li>
-		<li class="nav-item">
-		  <a class="nav-link" href="{{ url_for('admin.search_member') }}">🔍 Search Member</a>
-		</li>
+
+  <!-- Dashboard -->
+  <li class="nav-item">
+    <a class="nav-link" href="{{ url_for('admin.dashboard') }}">🏠 Dashboard</a>
+  </li>
+
+  <!-- User Management -->
+  <li class="nav-item">
+    <a class="nav-link" data-bs-toggle="collapse" href="#userSubMenu">
+      👥 User Management
+    </a>
+    <div class="collapse" id="userSubMenu">
+      <ul class="nav flex-column ms-3">
         <li class="nav-item">
-		<a class="nav-link" data-bs-toggle="collapse" href="#memberSubMenu" role="button" aria-expanded="false" aria-controls="memberSubMenu">
-		  Member Management
-		</a>
-		<div class="collapse" id="memberSubMenu">
-		  <ul class="nav flex-column ms-3">
-			<li class="nav-item">
-			  <a class="nav-link load-page" href="{{ url_for('admin.add_member') }}">Add New Member</a>
-			</li>
-			<li class="nav-item">
-			  <a class="nav-link load-page" href="{{ url_for('admin.list_members') }}">List Members</a>
-			</li>
-			<li class="nav-item">
-			<a class="nav-link load-page" href="{{ url_for('admin.open_account') }}">Open Member Account</a>
-			</li>
-			<li class="nav-item">
-			<a class="nav-link load-page" href="{{ url_for('admin.post_transaction') }}">Post Payment</a>
-			</li>
-			<li class="nav-item">
-			<a class="nav-link load-page" href="{{ url_for('admin.list_member_deposits') }}">View Member Deposits</a>
-			</li>
-			<li><a class="dropdown-item text-danger" href="{{ url_for('admin.reverse_transaction') }}">🔁 Reverse Transaction</a></li>
+          <a class="nav-link" href="{{ url_for('admin.create_user') }}">Create User</a>
+        </li>
+        <li class="nav-item">
+          <a class="nav-link" href="{{ url_for('admin.list_users') }}">List Users</a>
+        </li>
+      </ul>
+    </div>
+  </li>
 
-		  </ul>
-		</div>
-		</li>
+  <!-- Member Management -->
+  <li class="nav-item">
+    <a class="nav-link" data-bs-toggle="collapse" href="#memberSubMenu">
+      👤 Member Management
+    </a>
+    <div class="collapse" id="memberSubMenu">
+      <ul class="nav flex-column ms-3">
+        <li><a class="nav-link" href="{{ url_for('admin.add_member') }}">Add New Member</a></li>
+        <li><a class="nav-link" href="{{ url_for('admin.list_members') }}">List Members</a></li>
+        <li><a class="nav-link" href="{{ url_for('admin.open_account') }}">Open Member Account</a></li>
+        <li><a class="nav-link" href="{{ url_for('admin.search_member') }}">🔍 Search Member</a></li>
+      </ul>
+    </div>
+  </li>
 
-        <li class="nav-item"><a class="nav-link" href="#">💰 Deposits</a></li>
-		<li class="nav-item">
-		  <a class="nav-link collapsed" href="#" data-bs-toggle="collapse" data-bs-target="#loanMenu" aria-expanded="false">
-			<i class="bi bi-cash-stack"></i>
-			<span>Loans</span>
-			<i class="bi bi-chevron-down float-end"></i>
-		  </a>
-		  <div id="loanMenu" class="collapse" data-bs-parent="#sidebarMenu">
-			<ul class="nav flex-column ms-3">
-			  <li class="nav-item">
-				<a class="nav-link" href="{{ url_for('admin.disburse_loan') }}">
-				  <i class="bi bi-plus-circle"></i> Disburse Loan
+  <!-- ========================= -->
+  <!-- DEPOSITS (UNIFIED MENU) -->
+  <!-- ========================= -->
+  <li class="nav-item">
+    <a class="nav-link" data-bs-toggle="collapse" href="#depositMenu">
+      💰 Deposits
+    </a>
+    <div class="collapse" id="depositMenu">
+      <ul class="nav flex-column ms-3">
+
+		  <li class="nav-item">
+				<a class="nav-link" href="{{ url_for('admin.loan_repayment') }}">
+				  <i class="bi bi-plus-circle"></i> Master Postings 
 				</a>
 			  </li>
-			  <li class="nav-item">
+        <li class="nav-item">
+          <a class="nav-link" href="{{ url_for('admin.post_transaction') }}">
+            Simple Postings 
+          </a>
+        </li>
+
+        <li class="nav-item">
+          <a class="nav-link" href="{{ url_for('admin.list_member_deposits') }}">
+            View Member Deposits
+          </a>
+        </li>
+		  <li class="nav-item">
 				<a class="nav-link" href="{{ url_for('admin.upload_loan_repayments') }}">
-				Upload Repayments
+				Upload all Bank Postings
 				</a>
 				</li>
-			  <li class="nav-item">
-				<a class="nav-link" href="{{ url_for('admin.loan_repayment') }}">
-				  <i class="bi bi-plus-circle"></i> Master Payments 
-				</a>
-			  </li>
-			<li class="nav-item">
-			  <a class="nav-link" href="{{ url_for('admin.loan_prepayment') }}">
-				<i class="bi bi-cash-stack me-1"></i> Loan Prepayment
-			  </a>
-			</li>
-			<li><a class="dropdown-item" href="{{ url_for('admin.repay_loan_from_savings') }}">
-			Payment from Savings</a></li>
+        <li class="nav-item">
+          <a class="nav-link" href="{{ url_for('admin.upload_member_savings') }}">
+            Upload Bank Payments(no-loan)
+          </a>
+        </li>
 
-			  <li class="nav-item">
-				<a class="nav-link" href="{{ url_for('admin.list_loans') }}">
-				  <i class="bi bi-list-check"></i> List Loans
-				</a>
-			  </li>
-			</ul>
-		  </div>
-		</li>
-		<li class="nav-item dropdown">
-		  <a class="nav-link dropdown-toggle text-blue" href="#" id="reportsDropdown" role="button"
-			 data-bs-toggle="dropdown" aria-expanded="false">
-			📄 Reports
-		  </a>
-		  <ul class="dropdown-menu dropdown-menu-dark" aria-labelledby="reportsDropdown">
-			<li>
-			  <a class="dropdown-item" href="{{ url_for('admin.generate_member_loan_summary') }}">
-				📊 Member Loan Summary
-			  </a>
-			</li>
-			<li>
-			  <a class="dropdown-item" href="{{ url_for('admin.generate_guarantor_report') }}">
-				🧾 Guarantor Report
-			  </a>
-			</li>
-				<li><a class="dropdown-item" href="{{ url_for('admin.trial_balance') }}">📘 Trial Balance</a></li>
-				<li><a class="dropdown-item" href="{{ url_for('admin.balance_sheet') }}">📊 Balance Sheet</a></li>
-				<li><a class="dropdown-item" href="{{ url_for('admin.income_statement') }}">📄 Income Statement</a></li>
-				<li><a class="dropdown-item" href="{{ url_for('admin.cashflow_statement') }}">💵 Cash Flow Statement</a></li>
-				<li><a class="dropdown-item" href="{{ url_for('admin.gl_report') }}">📘 GL Report</a></li>
+        <li class="nav-item">
+          <a class="nav-link" href="{{ url_for('admin.repay_loan_from_savings') }}">
+            Payment from Savings
+          </a>
+        </li>
 
-		  </ul>
-		</li>
-
-		<!-- Statements Dropdown -->
-		<li class="nav-item dropdown">
-		  <a class="nav-link dropdown-toggle" href="#" id="statementsDropdown" role="button"
-			 data-bs-toggle="dropdown" aria-expanded="false">
-			📊 Statements
-		  </a>
-		  <ul class="dropdown-menu shadow-sm" aria-labelledby="statementsDropdown">
-			<li>
-			  <a class="dropdown-item" href="{{ url_for('admin.savings_statement_form') }}">
-				💰 Savings Statement
-			  </a>
-			</li>
-			<li>
-			  <a class="dropdown-item" href="{{ url_for('admin.loan_statement_form') }}">
-				📄 Loan Statement
-			  </a>
-			</li>
-		  </ul>
-		</li>
-
-		<!-- Audit Logs Dropdown -->
-		<li class="nav-item dropdown">
-		  <a class="nav-link dropdown-toggle" href="#" id="auditlogDropdown" role="button"
-			 data-bs-toggle="dropdown" aria-expanded="false">
-			🕵️ Audit Logs
-		  </a>
-		  <ul class="dropdown-menu shadow-sm" aria-labelledby="auditlogDropdown">
-			<li>
-			  <a class="dropdown-item" href="{{ url_for('admin.audit_logs') }}">Audit Logs</a></li>
-			
-		  </ul>
-		</li>
-		<li class="nav-item">
-		  <a class="nav-link" href="{{ url_for('admin.upload_member_savings') }}">
-			<i class="bi bi-upload"></i> Upload Member Savings
-		  </a>
-		</li>
+        <li class="nav-item">
+          <a class="nav-link text-danger" href="{{ url_for('admin.reverse_transaction') }}">
+            🔁 Reverse Transaction
+          </a>
+        </li>
 
       </ul>
+    </div>
+  </li>
+
+  <!-- ========================= -->
+  <!-- LOANS -->
+  <!-- ========================= -->
+  <li class="nav-item">
+    <a class="nav-link" data-bs-toggle="collapse" href="#loanMenu">
+      💳 Loans
+    </a>
+    <div class="collapse" id="loanMenu">
+      <ul class="nav flex-column ms-3">
+        <li><a class="nav-link" href="{{ url_for('admin.disburse_loan') }}">Disburse Loan</a></li>
+        <li><a class="nav-link" href="{{ url_for('admin.loan_statement_view2') }}">Loan Statement</a></li>
+        <li><a class="nav-link" href="{{ url_for('admin.view_member_loan_schedules') }}">View Member Loan Schedules</a></li>
+        <li><a class="nav-link" href="{{ url_for('admin.upload_loan_repayments') }}">Upload Repayments</a></li>
+        <li><a class="nav-link" href="{{ url_for('admin.loan_prepayment') }}">Loan Prepayment</a></li>
+        <li><a class="nav-link" href="{{ url_for('admin.list_loans') }}">List Loans</a></li>
+      </ul>
+    </div>
+  </li>
+
+  <!-- Reports -->
+  <li class="nav-item dropdown">
+    <a class="nav-link dropdown-toggle" href="#" data-bs-toggle="dropdown">📄 Reports</a>
+    <ul class="dropdown-menu">
+      <li><a class="dropdown-item" href="{{ url_for('admin.generate_member_loan_summary') }}">Member Loan Summary</a></li>
+      <li><a class="dropdown-item" href="{{ url_for('admin.generate_guarantor_report') }}">Guarantor Report</a></li>
+      <li><a class="dropdown-item" href="{{ url_for('admin.trial_balance') }}">Trial Balance</a></li>
+      <li><a class="dropdown-item" href="{{ url_for('admin.balance_sheet') }}">Balance Sheet</a></li>
+      <li><a class="dropdown-item" href="{{ url_for('admin.income_statement') }}">Income Statement</a></li>
+      <li><a class="dropdown-item" href="{{ url_for('admin.cashflow_statement') }}">Cash Flow Statement</a></li>
+      <li><a class="dropdown-item" href="{{ url_for('admin.gl_report') }}">GL Report</a></li>
+    </ul>
+  </li>
+
+  <!-- Statements -->
+  <li class="nav-item dropdown">
+    <a class="nav-link dropdown-toggle" href="#" data-bs-toggle="dropdown">📊 Statements</a>
+    <ul class="dropdown-menu">
+      <li><a class="dropdown-item" href="{{ url_for('admin.savings_statement_form') }}">Savings Statement</a></li>
+      <li><a class="dropdown-item" href="{{ url_for('admin.loan_statement_form') }}">Loan Statement</a></li>
+    </ul>
+  </li>
+
+  <!-- Audit -->
+  <li class="nav-item">
+    <a class="nav-link" href="{{ url_for('admin.audit_logs') }}">🕵️ Audit Logs</a>
+  </li>
+
+</ul>
+
     </div>
 
     <!-- Main content -->
