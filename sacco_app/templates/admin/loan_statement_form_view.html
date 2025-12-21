@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+{% block content %}
+
+<h4>Loan Statement</h4>
+
+<!-- 🔹 INPUT FORM -->
+<form method="post" class="row g-3 mb-3">
+  <div class="col-md-4">
+    <label class="form-label">Member Number</label>
+    <input type="text"
+           name="member_no"
+           class="form-control"
+           placeholder="e.g. M0011"
+           required
+           value="{{ member_no or '' }}">
+  </div>
+
+  <div class="col-md-2 align-self-end">
+    <button type="submit" class="btn btn-primary">
+      View Statement
+    </button>
+  </div>
+</form>
+
+<!-- 🔹 RESULTS TABLE (ONLY AFTER SUBMIT) -->
+{% if statement %}
+<hr>
+
+<table class="table table-bordered table-sm">
+  <thead>
+    <tr>
+      <th>Date</th>
+      <th>Narration</th>
+      <th>Interest Paid</th>
+      <th>Principal Paid</th>
+      <th>Loan Balance</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for row in statement %}
+    <tr>
+      <td>{{ row.bank_txn_date }}</td>
+      <td>{{ row.narration }}</td>
+      <td>{{ row.interest_paid }}</td>
+      <td>{{ row.principal_paid  }}</td>
+      <td>
+        {% if row.loan_balance is not none %}
+          <strong>{{ row.loan_balance  }}</strong>
+        {% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+{% elif member_no %}
+<div class="alert alert-warning">
+  No loan transactions found for member {{ member_no }}
+</div>
+{% endif %}
+
+{% endblock %}

@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div class="container">
+    <h4 class="mb-3">View Member Loan Schedules</h4>
+
+    <div class="card mb-3">
+        <div class="card-body">
+            <form id="searchForm" class="row g-2">
+                <div class="col-md-4">
+                    <input type="text" id="member_no" class="form-control"
+                           placeholder="Enter Member Number" required>
+                </div>
+                <div class="col-md-2">
+                    <button class="btn btn-primary">Search</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <div id="results"></div>
+</div>
+
+<script>
+document.getElementById("searchForm").addEventListener("submit", function(e){
+    e.preventDefault();
+
+    const memberNo = document.getElementById("member_no").value;
+    const results = document.getElementById("results");
+
+    results.innerHTML = "<p>Loading loan schedules...</p>";
+
+    fetch(`/admin/loans/member-schedules/${memberNo}`)
+        .then(res => res.json())
+        .then(data => {
+            if (data.error) {
+                results.innerHTML = `<div class="alert alert-warning">${data.error}</div>`;
+                return;
+            }
+
+            let html = `
+            <table class="table table-bordered table-striped mt-3">
+                <thead class="table-dark">
+                    <tr>
+                        <th>Loan No</th>
+                        <th>Inst</th>
+                        <th>Due Date</th>
+                        <th>Principal Due</th>
+                        <th>Principal Paid</th>
+                        <th>Interest Due</th>
+                        <th>Interest Paid</th>
+                        <th>Status</th>
+                    </tr>
+                </thead>
+                <tbody>
+            `;
+
+            data.schedules.forEach(r => {
+                html += `
+                <tr class="${r.status === 'DUE' ? 'table-danger' : ''}">
+                    <td>${r.loan_no}</td>
+                    <td>${r.installment_no}</td>
+                    <td>${r.due_date}</td>
+                    <td>${r.principal_due}</td>
+                    <td>${r.principal_paid}</td>
+                    <td>${r.interest_due}</td>
+                    <td>${r.interest_paid}</td>
+                    <td>${r.status}</td>
+                </tr>`;
+            });
+
+            html += "</tbody></table>";
+            results.innerHTML = html;
+        })
+        .catch(() => {
+            results.innerHTML = `<div class="alert alert-danger">Error fetching data</div>`;
+        });
+});
+</script>
+
+{% endblock %}
