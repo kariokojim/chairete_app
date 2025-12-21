@@ -80,71 +80,76 @@ def post_savings(member_no, amount, user, narration, bank_txn_date):
     db.session.commit()
 
     return txn.txn_no
+
+
+##### POSTING PAYMENTS FROM BANK
+
 def process_loan_repayment(member_no, amount, narration, bank_txn_date, posted_by):
     """
-    Apply repayment only to installments whose due_date <= bank_txn_date.
-    Allocation order: Interest -> Principal, then any remainder -> member savings.
-    No prepayment of future installments.
+    Bank posting logic:
+    1. If member has ACTIVE loan:
+        - Pay INTEREST first (due only)
+        - Then PRINCIPAL (due only)
+        - Any remainder -> SAVINGS
+    2. If NO active loan:
+        - Entire amount -> SAVINGS
     """
+
     from sacco_app import db
-    from sacco_app.models import Member, Loan, LoanSchedule, SaccoAccount, Transaction
+    from sacco_app.models import (
+        Member, Loan, LoanSchedule, SaccoAccount, Transaction
+    )
     from datetime import datetime
     from decimal import Decimal
+    from sqlalchemy import or_
     import uuid
-    from sqlalchemy import or_, and_
 
-    # --- Parse inputs
+    # --------------------------------------------------
+    # INPUTS
+    # --------------------------------------------------
     txn_date = datetime.strptime(bank_txn_date, "%Y-%m-%d")
     txn_date_only = txn_date.date()
     amount = Decimal(str(amount))
-    if amount <= 0:
-        raise Exception("Repayment amount must be greater than zero.")
 
-    # --- Entities
+    if amount <= 0:
+        raise Exception("Amount must be greater than zero")
+
+    txn_ref = f"TXN{uuid.uuid4().hex[:10].upper()}"
+    remaining = amount
+    transactions = []
+
+    # --------------------------------------------------
+    # MEMBER
+    # --------------------------------------------------
     member = Member.query.filter_by(member_no=member_no).first()
     if not member:
-        raise Exception(f"Member {member_no} not found.")
+        raise Exception(f"Member {member_no} not found")
 
-    loan = Loan.query.filter_by(member_no=member_no, status='Active').first()
-    if not loan:
-        raise Exception("No active loan found for this member.")
-
-    # Member & GL accounts
-    member_loan_acc = SaccoAccount.query.filter_by(account_number=loan.loan_account).first()
-    member_interest_acc = SaccoAccount.query.filter_by(account_number=loan.interest_account).first()
-    member_savings_acc = SaccoAccount.query.filter_by(member_no=member_no, account_type='SAVINGS').first()
-
+    # --------------------------------------------------
+    # ACCOUNTS (GL)
+    # --------------------------------------------------
     gl_cash = SaccoAccount.query.filter_by(account_number='M000GL_CASH').first()
     gl_loan_control = SaccoAccount.query.filter_by(account_number='M000GL_LOAN').first()
     gl_interest_income = SaccoAccount.query.filter_by(account_number='M000GL_LN_INT').first()
     gl_savings_control = SaccoAccount.query.filter_by(account_number='M000GL_SAVINGS').first()
 
-    if not all([member_loan_acc, member_interest_acc, member_savings_acc, gl_cash, gl_loan_control, gl_interest_income, gl_savings_control]):
-        raise Exception("One or more required accounts are missing (member or GL).")
+    if not all([gl_cash, gl_loan_control, gl_interest_income, gl_savings_control]):
+        raise Exception("One or more GL accounts missing")
 
-    # --- Collect ONLY past-due (or partially paid) schedules as of txn_date
-    schedules = LoanSchedule.query.filter(
-        LoanSchedule.loan_no == loan.loan_no,
-        LoanSchedule.due_date <= txn_date_only,
-        or_(
-            LoanSchedule.principal_paid < LoanSchedule.principal_due,
-            LoanSchedule.interest_paid < LoanSchedule.interest_due
-        )
-    ).order_by(LoanSchedule.due_date, LoanSchedule.installment_no).all()
+    member_savings_acc = SaccoAccount.query.filter_by(
+        member_no=member_no,
+        account_type='SAVINGS'
+    ).first()
 
-    # If nothing is due as of txn date, entire amount goes to savings
-    apply_to_schedules = True
-    if not schedules:
-        apply_to_schedules = False
+    if not member_savings_acc:
+        raise Exception(f"Savings account missing for {member_no}")
 
-    remaining = amount
-    txn_ref = f"TXN{uuid.uuid4().hex[:10].upper()}"
-    transactions = []
-
-    # --- 1) Dr CASH for total received
+    # --------------------------------------------------
+    # DR CASH (RECEIPT)
+    # --------------------------------------------------
     gl_cash.balance += amount
     transactions.append(Transaction(
-        txn_no=txn_ref,
+        txn_no=f"ROW{uuid.uuid4().hex[:12].upper()}",
         member_no=member_no,
         account_no=gl_cash.account_number,
         gl_account='CASH',
@@ -152,157 +157,205 @@ def process_loan_repayment(member_no, amount, narration, bank_txn_date, posted_b
         debit_amount=amount,
         credit_amount=Decimal('0.00'),
         reference=txn_ref,
-        narration=narration or f"Loan repayment received from {member_no}",
+        narration=narration or f"Bank receipt {member_no}",
         bank_txn_date=txn_date,
         posted_by=posted_by,
         running_balance=gl_cash.balance
     ))
 
-    # --- 2) Allocate to interest then principal for DUE/PARTIAL schedules only
-    if apply_to_schedules and remaining > 0:
+    # --------------------------------------------------
+    # ACTIVE LOAN (IF ANY)
+    # --------------------------------------------------
+    loan = Loan.query.filter(
+        Loan.member_no == member_no,
+        Loan.status == 'Active',
+        Loan.balance > 0
+    ).order_by(Loan.disbursed_date.desc()).first()
+
+    # ==================================================
+    # LOAN EXISTS → PAY DUE INTEREST & PRINCIPAL
+    # ==================================================
+    if loan:
+
+        member_loan_acc = SaccoAccount.query.filter_by(
+            account_number=loan.loan_account
+        ).first()
+        member_interest_acc = SaccoAccount.query.filter_by(
+            account_number=loan.interest_account
+        ).first()
+
+        if not member_loan_acc or not member_interest_acc:
+            raise Exception("Loan or interest account missing")
+
+        schedules = LoanSchedule.query.filter(
+            LoanSchedule.loan_no == loan.loan_no,
+            LoanSchedule.due_date <= txn_date_only,
+            or_(
+                LoanSchedule.interest_paid < LoanSchedule.interest_due,
+                LoanSchedule.principal_paid < LoanSchedule.principal_due
+            )
+        ).order_by(
+            LoanSchedule.due_date,
+            LoanSchedule.installment_no
+        ).all()
+
         for sch in schedules:
             if remaining <= 0:
                 break
 
-            # Interest first
-            interest_due_left = (sch.interest_due - sch.interest_paid)
-            if remaining > 0 and interest_due_left > 0:
-                pay_interest = min(remaining, interest_due_left)
+            # -------------------------------
+            # INTEREST FIRST
+            # -------------------------------
+            interest_left = sch.interest_due - sch.interest_paid
+            if interest_left > 0 and remaining > 0:
+                pay_interest = min(interest_left, remaining)
+
                 sch.interest_paid += pay_interest
                 remaining -= pay_interest
 
-                # Member interest (Cr) and GL interest income (Cr)
+                # Balances
                 member_interest_acc.balance -= pay_interest
-                transactions.append(Transaction(
-                    txn_no=f"TXN{uuid.uuid4().hex[:10].upper()}",
-                    member_no=member_no,
-                    account_no=member_interest_acc.account_number,
-                    gl_account='MEMBER_INTEREST',
-                    tran_type='ASSET',
-                    debit_amount=Decimal('0.00'),
-                    credit_amount=pay_interest,
-                    reference=txn_ref,
-                    narration=f"Interest repayment - inst {sch.installment_no}",
-                    bank_txn_date=txn_date,
-                    posted_by=posted_by,
-                    running_balance=member_interest_acc.balance
-                ))
-
                 gl_interest_income.balance += pay_interest
-                transactions.append(Transaction(
-                    txn_no=f"TXN{uuid.uuid4().hex[:10].upper()}",
-                    member_no='M000GL',
-                    account_no=gl_interest_income.account_number,
-                    gl_account='INTEREST_INCOME',
-                    tran_type='INCOME',
-                    debit_amount=Decimal('0.00'),
-                    credit_amount=pay_interest,
-                    reference=txn_ref,
-                    narration=f"Interest income from {member_no}",
-                    bank_txn_date=txn_date,
-                    posted_by=posted_by,
-                    running_balance=gl_interest_income.balance
-                ))
 
-            # Then principal
-            principal_due_left = (sch.principal_due - sch.principal_paid)
-            if remaining > 0 and principal_due_left > 0:
-                pay_principal = min(remaining, principal_due_left)
+                transactions.extend([
+                    Transaction(
+                        txn_no=f"ROW{uuid.uuid4().hex[:12].upper()}",
+                        member_no=member_no,
+                        account_no=member_interest_acc.account_number,
+                        gl_account='MEMBER_INTEREST',
+                        tran_type='ASSET',
+                        debit_amount=pay_interest,
+                        credit_amount=Decimal('0.00'),
+                        reference=txn_ref,
+                        narration=f"Interest repayment inst {sch.installment_no}",
+                        bank_txn_date=txn_date,
+                        posted_by=posted_by,
+                        running_balance=member_interest_acc.balance
+                    ),
+                    Transaction(
+                        txn_no=f"ROW{uuid.uuid4().hex[:12].upper()}",
+                        member_no='M000GL',
+                        account_no=gl_interest_income.account_number,
+                        gl_account='INTEREST_INCOME',
+                        tran_type='INCOME',
+                        debit_amount=pay_interest,
+                        credit_amount=Decimal('0.00'),
+                        reference=txn_ref,
+                        narration=f"Interest income {member_no}",
+                        bank_txn_date=txn_date,
+                        posted_by=posted_by,
+                        running_balance=gl_interest_income.balance
+                    )
+                ])
+
+            # -------------------------------
+            # PRINCIPAL
+            # -------------------------------
+            principal_left = sch.principal_due - sch.principal_paid
+            if principal_left > 0 and remaining > 0:
+                pay_principal = min(principal_left, remaining)
+
                 sch.principal_paid += pay_principal
                 loan.balance -= pay_principal
                 remaining -= pay_principal
 
-                # Member loan (Cr) and GL loan control (Cr)
+                # 🔑 IMPORTANT: Explicit balance reduction
                 member_loan_acc.balance -= pay_principal
-                transactions.append(Transaction(
-                    txn_no=f"TXN{uuid.uuid4().hex[:10].upper()}",
-                    member_no=member_no,
-                    account_no=member_loan_acc.account_number,
-                    gl_account='MEMBER_LOAN',
-                    tran_type='ASSET',
-                    debit_amount=Decimal('0.00'),
-                    credit_amount=pay_principal,
-                    reference=txn_ref,
-                    narration=f"Principal repayment - inst {sch.installment_no}",
-                    bank_txn_date=txn_date,
-                    posted_by=posted_by,
-                    running_balance=member_loan_acc.balance
-                ))
-
                 gl_loan_control.balance -= pay_principal
-                transactions.append(Transaction(
-                    txn_no=f"TXN{uuid.uuid4().hex[:10].upper()}",
-                    member_no='M000GL',
-                    account_no=gl_loan_control.account_number,
-                    gl_account='LOAN_CONTROL',
-                    tran_type='ASSET',
-                    debit_amount=Decimal('0.00'),
-                    credit_amount=pay_principal,
-                    reference=txn_ref,
-                    narration=f"Loan receivable reduction - {member_no}",
-                    bank_txn_date=txn_date,
-                    posted_by=posted_by,
-                    running_balance=gl_loan_control.balance
-                ))
 
-            # Update schedule status
-            if sch.principal_paid >= sch.principal_due and sch.interest_paid >= sch.interest_due:
-                sch.status = 'PAID'
-            else:
-                sch.status = 'PARTIAL'
+                transactions.extend([
+                    Transaction(
+                        txn_no=f"ROW{uuid.uuid4().hex[:12].upper()}",
+                        member_no=member_no,
+                        account_no=member_loan_acc.account_number,
+                        gl_account='MEMBER_LOAN',
+                        tran_type='ASSET',
+                        debit_amount=pay_principal,
+                        credit_amount=Decimal('0.00'),
+                        reference=txn_ref,
+                        narration=f"Principal repayment inst {sch.installment_no}",
+                        bank_txn_date=txn_date,
+                        posted_by=posted_by,
+                        running_balance=member_loan_acc.balance
+                    ),
+                    Transaction(
+                        txn_no=f"ROW{uuid.uuid4().hex[:12].upper()}",
+                        member_no='M000GL',
+                        account_no=gl_loan_control.account_number,
+                        gl_account='LOAN_CONTROL',
+                        tran_type='ASSET',
+                        debit_amount=pay_principal,
+                        credit_amount=Decimal('0.00'),
+                        reference=txn_ref,
+                        narration=f"Loan control reduction {member_no}",
+                        bank_txn_date=txn_date,
+                        posted_by=posted_by,
+                        running_balance=gl_loan_control.balance
+                    )
+                ])
 
-    # --- 3) Any remainder (no prepayment of future): send to savings
+            # Schedule status
+            sch.status = (
+                'PAID'
+                if sch.interest_paid >= sch.interest_due
+                and sch.principal_paid >= sch.principal_due
+                else 'PARTIAL'
+            )
+
+        # Close loan if cleared
+        if loan.balance <= 0:
+            loan.balance = Decimal('0.00')
+            loan.status = 'CLEARED'
+
+    # ==================================================
+    # REMAINDER → SAVINGS (LOAN OR NO LOAN)
+    # ==================================================
     if remaining > 0:
         member_savings_acc.balance += remaining
         gl_savings_control.balance += remaining
 
-        transactions.append(Transaction(
-            txn_no=f"TXN{uuid.uuid4().hex[:10].upper()}",
-            member_no=member_no,
-            account_no=member_savings_acc.account_number,
-            gl_account='SAVINGS',
-            tran_type='LIABILITY',
-            debit_amount=Decimal('0.00'),
-            credit_amount=remaining,
-            reference=txn_ref,
-            narration=f"Excess funds to savings ({member_no})",
-            bank_txn_date=txn_date,
-            posted_by=posted_by,
-            running_balance=member_savings_acc.balance
-        ))
-        transactions.append(Transaction(
-            txn_no=f"TXN{uuid.uuid4().hex[:10].upper()}",
-            member_no='M000GL',
-            account_no=gl_savings_control.account_number,
-            gl_account='SAVINGS_CONTROL',
-            tran_type='LIABILITY',
-            debit_amount=Decimal('0.00'),
-            credit_amount=remaining,
-            reference=txn_ref,
-            narration=f"Savings control posting for {member_no}",
-            bank_txn_date=txn_date,
-            posted_by=posted_by,
-            running_balance=gl_savings_control.balance
-        ))
+        transactions.extend([
+            Transaction(
+                txn_no=f"ROW{uuid.uuid4().hex[:12].upper()}",
+                member_no=member_no,
+                account_no=member_savings_acc.account_number,
+                gl_account='SAVINGS',
+                tran_type='SAVINGS',
+                debit_amount=Decimal('0.00'),
+                credit_amount=remaining,
+                reference=txn_ref,
+                narration=f"Savings deposit {member_no}",
+                bank_txn_date=txn_date,
+                posted_by=posted_by,
+                running_balance=member_savings_acc.balance
+            ),
+            Transaction(
+                txn_no=f"ROW{uuid.uuid4().hex[:12].upper()}",
+                member_no='M000GL',
+                account_no=gl_savings_control.account_number,
+                gl_account='SAVINGS_CONTROL',
+                tran_type='LIABILITY',
+                debit_amount=Decimal('0.00'),
+                credit_amount=remaining,
+                reference=txn_ref,
+                narration=f"Savings control {member_no}",
+                bank_txn_date=txn_date,
+                posted_by=posted_by,
+                running_balance=gl_savings_control.balance
+            )
+        ])
 
-    # --- 4) Close loan if fully settled
-    if loan.balance <= 0:
-        loan.status = 'Cleared'
-        loan.balance = Decimal('0.00')
-
-    # --- Commit
+    # --------------------------------------------------
+    # COMMIT
+    # --------------------------------------------------
     db.session.add_all(transactions)
     db.session.commit()
 
-    # Build a friendly message
-    if apply_to_schedules:
-        msg = f"Loan repayment of {amount:.2f} posted for {member_no} (as of {txn_date_only})."
-        if remaining > 0:
-            msg += f" Excess {remaining:.2f} moved to savings."
-    else:
-        msg = f"No installments due as of {txn_date_only}. Entire {amount:.2f} moved to savings."
-
-    return msg
+    return (
+        f"{amount:.2f} posted for {member_no}. "
+        f"Loan balance: {loan.balance if loan else 'N/A'}, "
+        f"Savings credited: {remaining:.2f}"
+    )
 
 
 #######
@@ -570,3 +623,4 @@ def process_loan_prepayment(member_no, amount, narration, bank_txn_date, posted_
 
     return f"Loan prepayment of {amount:.2f} processed successfully. Schedules updated."
 #Would you like the regeneration logic to shorten the loan period (same installment, fewer months)
+
