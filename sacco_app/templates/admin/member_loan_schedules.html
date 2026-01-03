@@ -7,6 +7,25 @@
     Loan Schedules for Member {{ loan.member_no }}
     <small class="text-muted">| Loan No: {{ loan.loan_no }}</small>
   </h5>
+<div class="d-flex gap-2 mb-3">
+
+  <a href="{{ url_for('admin.export_loan_schedules_pdf', loan_no=loan.loan_no) }}"
+     class="btn btn-sm btn-danger">
+    📄 Export PDF
+  </a>
+
+  <a href="{{ url_for('admin.export_loan_schedules_excel', loan_no=loan.loan_no) }}"
+     class="btn btn-sm btn-success">
+    📊 Export Excel
+  </a>
+
+  <a href="{{ url_for('admin.recalculate_loan_interest', loan_no=loan.loan_no) }}"
+     class="btn btn-sm btn-warning"
+     onclick="return confirm('Recalculate interest for this loan?')">
+    🔁 Recalculate Interest
+  </a>
+
+</div>
 
   <table class="table table-bordered table-striped table-sm">
     <thead class="table-dark">
