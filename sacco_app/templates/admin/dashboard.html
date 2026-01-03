@@ -3,10 +3,8 @@
 
 <div class="container-fluid mt-4">
     <h2 class="mb-4 fw-bold text-primary">Admin Dashboard</h2>
-
     <!-- SUMMARY CARDS -->
     <div class="row g-4">
-
         <!-- Total Members -->
         <div class="col-md-3 col-sm-6">
             <div class="card shadow-lg border-0 text-center" style="background:linear-gradient(135deg,#e3f2fd,#bbdefb);">
@@ -17,7 +15,6 @@
                 </div>
             </div>
         </div>
-
         <!-- Savings -->
         <div class="col-md-3 col-sm-6">
             <div class="card shadow-lg border-0 text-center" style="background:linear-gradient(135deg,#e8f5e9,#c8e6c9);">
@@ -28,7 +25,6 @@
                 </div>
             </div>
         </div>
-
         <!-- Loans -->
         <div class="col-md-3 col-sm-6">
             <div class="card shadow-lg border-0 text-center" style="background:linear-gradient(135deg,#ffebee,#ffcdd2);">
@@ -51,7 +47,7 @@
             </div>
         </div>
     </div>
-
+		
     <!-- KPI ROW 2 -->
     <div class="row g-4 mt-4">
 
@@ -114,7 +110,33 @@
                 </div>
             </div>
         </div>
+		<div class="col-md-3 col-sm-6">
+  <div class="card shadow-lg border-0 text-center" style="background:linear-gradient(135deg,#fce4ec,#f8bbd0);
+    {% if par_percentage < 5 %}border-success
+    {% elif par_percentage < 10 %}border-warning
+    {% else %}border-danger{% endif %}">
 
+     <div class="card-body py-4">
+      <h6 class="text-muted mb-1">Portfolio at Risk (PAR %)</h6>
+      <h3 class="
+        {% if par_percentage < 5 %}text-success
+        {% elif par_percentage < 10 %}text-warning
+        {% else %}text-danger{% endif %}
+      ">
+        {{ par_percentage }}%
+      </h3>
+      <small class="text-muted">
+        Risk: {{ "{:,.2f}".format(portfolio_at_risk) }} <br>
+        Portfolio: {{ "{:,.2f}".format(total_portfolio) }}
+      </small>
+
+      <div class="mt-2">
+        <a href="{{ url_for('admin.loan_par_view') }}"
+           class="stretched-link"></a>
+      </div>
+    </div>
+  </div>
+</div>
     </div>
 
 </div>
