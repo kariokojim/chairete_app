@@ -336,7 +336,7 @@ def list_member_deposits():
         deposits = Transaction.query.filter(
             Transaction.member_no == member_no,
             Transaction.bank_txn_date.between(start_date, end_date),
-            Transaction.tran_type == 'SAVINGS'
+            Transaction.tran_type.in_(['SAVINGS', 'LIABILITY'])
         ).order_by(Transaction.id.asc()).all()
 
         return render_template(
@@ -2907,3 +2907,454 @@ def fetch_member_loan_schedules(member_no):
             })
 
     return jsonify({"schedules": rows})
+
+### upload PDF statements
+
+@admin_bp.route('/bank-pdf', methods=['GET'])
+@login_required
+def bank_pdf_form():
+    return render_template('admin/bank_pdf_upload.html')
+
+
+@admin_bp.route('/bank-pdf/upload', methods=['POST'])
+@login_required
+def bank_pdf_upload():
+
+    if 'pdf_file' not in request.files:
+        flash("No file selected", "danger")
+        return redirect(url_for('admin.bank_pdf_form'))
+
+    pdf_file = request.files['pdf_file']
+
+    if pdf_file.filename == '':
+        flash("No file selected", "danger")
+        return redirect(url_for('admin.bank_pdf_form'))
+
+    if not pdf_file.filename.lower().endswith('.pdf'):
+        flash("Only PDF files are allowed", "danger")
+        return redirect(url_for('admin.bank_pdf_form'))
+
+    original_name = secure_filename(pdf_file.filename)
+    unique_id = uuid.uuid4().hex
+
+    pdf_filename = f"{unique_id}_{original_name}"
+    pdf_path = os.path.join(
+        current_app.config['UPLOAD_FOLDER'],
+        pdf_filename
+    )
+
+    pdf_root, _ = os.path.splitext(pdf_filename)
+    excel_filename = pdf_root + ".xlsx"
+    excel_path = os.path.join(
+        current_app.config['UPLOAD_FOLDER'],
+        excel_filename
+    )
+
+    print("PDF PATH  :", pdf_path)
+    print("EXCEL PATH:", excel_path)
+
+    pdf_file.save(pdf_path)
+
+    # ---------------- SAFE CONVERSION ----------------
+    try:
+        convert_bank_pdf_to_excel(pdf_path, excel_path)
+    except Exception as e:
+        current_app.logger.error(e)
+        flash(f"PDF conversion failed: {e}", "danger")
+        return redirect(url_for('admin.bank_pdf_form'))
+
+    # ---------------- ENSURE FILE EXISTS ----------------
+    if not os.path.exists(excel_path):
+        flash("Excel file was not generated.", "danger")
+        return redirect(url_for('admin.bank_pdf_form'))
+
+    flash("PDF converted successfully", "success")
+
+    return send_file(
+        excel_path,
+        as_attachment=True,
+        download_name=excel_filename
+    )
+###FIND MEMBER IN THE MEMBER TABLE
+from rapidfuzz import process, fuzz
+
+def find_member_by_name(session, name):
+    """
+    Attempts to find a member using name.
+    Returns (member_no, confidence) or (None, 0)
+    """
+
+    if not name:
+        return None, 0
+
+    name = name.upper().strip()
+
+    members = session.execute(
+        "SELECT member_no, full_name FROM members"
+    ).fetchall()
+
+    if not members:
+        return None, 0
+
+    # Exact match first
+    for m in members:
+        if m.name.upper() == name:
+            return m.member_no, 100
+
+    # Fuzzy match
+    choices = {m.name.upper(): m.member_no for m in members}
+
+    match, score, _ = process.extractOne(
+        name,
+        choices.keys(),
+        scorer=fuzz.token_sort_ratio
+    )
+
+    if score >= 85:  # SAFE threshold
+        return choices[match], score
+
+    return None, score
+
+####EXTRACT NAME FROM PDF
+def extract_name(tx_details):
+    """
+    Extracts name from transaction details line.
+    Example: 00222~ALVIN MAINA
+    """
+
+    if "~" in tx_details:
+        parts = tx_details.split("~")
+        if len(parts) >= 2:
+            return parts[-1].strip().upper()
+
+    return ""
+####EXTRACT NAME FROM PDF_test
+import re
+import pdfplumber
+import pandas as pd
+from datetime import datetime
+from collections import defaultdict
+
+
+# ---------------------------------------------------
+# 1. IDENTIFY REAL TRANSACTION DETAILS
+# ---------------------------------------------------
+def is_transaction_line(text: str) -> bool:
+    if not text:
+        return False
+
+    t = text.upper()
+
+    if any(k in t for k in ["MPESA", "PESALINK", "POS", "CHQ", "CHEQUE", "01134211013100"]):
+        return True
+
+    # phone / reference numbers
+    if re.search(r"\d{10,}", t):
+        return True
+
+    return False
+
+
+# ---------------------------------------------------
+# 2. EXTRACT CLEAN TX DETAILS FROM SAME ROW
+# ---------------------------------------------------
+def extract_clean_tx_details_from_row(row_words):
+    """
+    Extracts ONLY the transaction-details column.
+    Stops when numeric money columns start.
+    """
+
+    parts = []
+
+    for w in row_words:
+        text = w["text"]
+
+        # Stop once money columns begin
+        if re.fullmatch(r"[\d,]+\.\d{2}", text):
+            break
+
+        # Skip standalone dates
+        if re.match(r"\d{2}/\d{2}/\d{4}", text):
+            continue
+
+        parts.append(text)
+
+    line = " ".join(parts).strip()
+
+    if is_transaction_line(line):
+        return line
+
+    return ""
+
+
+# ---------------------------------------------------
+# 3. NORMALIZE MEMBER NUMBER (SAFE)
+# ---------------------------------------------------
+def normalize_member_no(tx_details: str) -> str:
+    if not tx_details:
+        return ""
+
+    text = tx_details.upper().replace("O", "0")
+
+    # STRICT: must follow # or ~
+    match = re.search(r"[#~](M?\d{2,5})\b", text)
+    if not match:
+        return ""
+
+    digits = re.findall(r"\d", match.group(1))
+    if not digits:
+        return ""
+
+    return f"M{''.join(digits).zfill(4)}"
+
+
+# ---------------------------------------------------
+# 4. MAIN CONVERTER (CREDIT-ONLY)
+# ---------------------------------------------------
+def convert_bank_pdf_to_excel(pdf_path, excel_path):
+
+    rows = []
+
+    with pdfplumber.open(pdf_path) as pdf:
+        for page in pdf.pages:
+
+            words = page.extract_words(use_text_flow=False)
+            if not words:
+                continue
+
+            # -----------------------------------
+            # GROUP WORDS BY VISUAL ROW (Y AXIS)
+            # -----------------------------------
+            rows_by_y = defaultdict(list)
+            for w in words:
+                rows_by_y[round(w["top"], 1)].append(w)
+
+            sorted_rows = sorted(rows_by_y.items(), key=lambda x: x[0])
+
+            # -----------------------------------
+            # PROCESS EACH ROW
+            # -----------------------------------
+            for y, row_words in sorted_rows:
+
+                # Sort left → right (CRITICAL)
+                row_words = sorted(row_words, key=lambda w: w["x0"])
+                texts = [w["text"] for w in row_words]
+                row_text = " ".join(texts).upper()
+
+                # Must explicitly be a CREDIT row
+                if "CR" not in row_text:
+                    continue
+
+                # Reject explicit debit rows
+                if any(x in row_text for x in [" DR", "DB", "DEBIT"]):
+                    continue
+
+                # ---- DATE ----
+                date_match = next(
+                    (t for t in texts if re.match(r"\d{2}/\d{2}/\d{4}", t)),
+                    None
+                )
+                if not date_match:
+                    continue
+
+                tx_date = datetime.strptime(date_match, "%d/%m/%Y")
+
+                # -----------------------------------
+                # CREDIT-ONLY AMOUNT EXTRACTION
+                # -----------------------------------
+                numeric_values = []
+                for t in texts:
+                    if re.fullmatch(r"[\d,]+\.\d{2}", t):
+                        try:
+                            numeric_values.append(float(t.replace(",", "")))
+                        except ValueError:
+                            pass
+
+                # Expect Debit | Credit | Balance
+                if len(numeric_values) < 2:
+                    continue
+
+                debit = numeric_values[0]
+                credit = numeric_values[1]
+
+                # Reject debits
+                if debit > 0:
+                    continue
+
+                # Reject zero / invalid credits
+                if credit <= 0:
+                    continue
+
+                # -----------------------------------
+                # TRANSACTION DETAILS
+                # -----------------------------------
+
+                # 1️⃣ SAME ROW (preferred)
+                tx_details = extract_clean_tx_details_from_row(row_words)
+
+                # 2️⃣ FALLBACK: LOOK ABOVE
+                if not tx_details:
+                    tx_lines = []
+
+                    for prev_y, prev_words in reversed(sorted_rows):
+                        if prev_y >= y:
+                            continue
+
+                        prev_words = sorted(prev_words, key=lambda w: w["x0"])
+                        prev_text = " ".join(w["text"] for w in prev_words).strip()
+
+                        # Stop at transaction boundary
+                        if (
+                            "CR" in prev_text.upper() or
+                            re.search(r"\d{2}/\d{2}/\d{4}", prev_text)
+                        ):
+                            break
+
+                        if is_transaction_line(prev_text):
+                            tx_lines.insert(0, prev_text)
+
+                    tx_details = " ".join(tx_lines).strip()
+
+                member_no = normalize_member_no(tx_details)
+                narration = tx_details[:35] if tx_details else ""
+
+                rows.append({
+                    "bank_txn_date": tx_date,
+                    "credit_amount": credit,
+                    "narration": narration,
+                    "member_no": member_no,
+                    "transaction_details": tx_details
+                })
+
+    if not rows:
+        raise ValueError("No valid credit transactions found")
+
+    # -----------------------------------
+    # EXPORT TO EXCEL
+    # -----------------------------------
+    df = pd.DataFrame(rows)
+    df["credit_amount"] = df["credit_amount"].astype(float)
+
+    df.to_excel(excel_path, index=False)
+
+###LIST LOANS PENDING
+@admin_bp.route('/loans')
+@login_required
+def loans_view():
+    sql = """
+    SELECT
+        l.member_no,
+        l.loan_amount AS principal_amount,
+        (ls.principal_due + ls.interest_due) AS monthly_total_repayment,
+        l.balance,
+        l.disbursed_date,
+        l.loan_period,
+        l.status
+    FROM loans l
+    LEFT JOIN loan_schedules ls
+        ON ls.loan_no = l.loan_no
+       AND ls.status = 'DUE'
+       AND ls.installment_no = (
+            SELECT MIN(installment_no)
+            FROM loan_schedules
+            WHERE loan_no = l.loan_no
+              AND status = 'DUE'
+       )
+    ORDER BY l.disbursed_date DESC
+    """
+    result = db.session.execute(text(sql)).fetchall()
+    return render_template('admin/loans.html', loans=result)
+
+#### LOAN ARREARS
+@admin_bp.route('/loans/arrears')
+@login_required
+def loan_arrears_view():
+    sql = """
+    SELECT
+        a.member_number,
+        a.loan_number,
+        a.monthly_repayment,
+        a.total_due_amount,
+        a.no_of_months_not_paid,
+        t.last_date_paid,
+        a.loan_balance,
+        a.principle_amount
+    FROM (
+        SELECT
+            l.loan_no AS loan_number,
+            l.member_no AS member_number,
+
+            -- 🔹 Monthly repayment = oldest unpaid installment
+            MIN(
+                COALESCE(ls.principal_due,0) + COALESCE(ls.interest_due,0)
+            ) AS monthly_repayment,
+
+            -- 🔹 Total arrears (all overdue installments)
+            SUM(
+                (COALESCE(ls.principal_due,0) + COALESCE(ls.interest_due,0))
+              - (COALESCE(ls.principal_paid,0) + COALESCE(ls.interest_paid,0))
+            ) AS total_due_amount,
+
+            COUNT(*) AS no_of_months_not_paid,
+
+            l.balance AS loan_balance,
+            l.loan_amount AS principle_amount
+
+        FROM loans l
+        JOIN loan_schedules ls
+            ON ls.loan_no = l.loan_no
+
+        WHERE
+            l.status IN ('Active')
+            AND ls.due_date < CURRENT_DATE
+            AND (
+                COALESCE(ls.principal_paid,0)
+              + COALESCE(ls.interest_paid,0)
+            ) < (
+                COALESCE(ls.principal_due,0)
+              + COALESCE(ls.interest_due,0)
+            )
+
+        GROUP BY
+            l.loan_no,
+            l.member_no,
+            l.balance,
+            l.loan_amount
+    ) a
+
+    LEFT JOIN (
+        SELECT
+            member_no,
+            MAX(bank_txn_date) AS last_date_paid
+        FROM transactions
+        WHERE tran_type IN ('ASSET')
+        GROUP BY member_no
+    ) t ON t.member_no = a.member_number
+
+    ORDER BY
+        a.no_of_months_not_paid DESC,
+        a.total_due_amount DESC;
+    """
+    arrears = db.session.execute(text(sql)).fetchall()
+    return render_template('admin/loan_arrears.html', arrears=arrears)
+
+###AUTO LOAD LOAN SCEDULES
+from datetime import date
+
+@admin_bp.route('/loans/<loan_no>/schedules')
+@login_required
+def view_loan_schedules_auto(loan_no):
+    loan = Loan.query.filter_by(loan_no=loan_no).first_or_404()
+
+    schedules = LoanSchedule.query.filter_by(
+        loan_no=loan_no
+    ).order_by(LoanSchedule.installment_no).all()
+
+    return render_template(
+        'admin/member_loan_schedules.html',
+        loan=loan,
+        schedules=schedules,
+        today=date.today()   
+
+    )
+
