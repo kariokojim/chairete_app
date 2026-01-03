@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div class="container-fluid mt-4">
+
+  <h4 class="mb-3">📈 Portfolio at Risk (PAR)</h4>
+
+  <div class="row">
+
+    <div class="col-md-4">
+      <div class="card shadow-sm">
+        <div class="card-body">
+          <h6>Total Loan Portfolio</h6>
+          <h4>{{ "{:,.2f}".format(total_portfolio) }}</h4>
+        </div>
+      </div>
+    </div>
+
+    <div class="col-md-4">
+      <div class="card shadow-sm border-danger">
+        <div class="card-body">
+          <h6 class="text-danger">Portfolio at Risk</h6>
+          <h4 class="text-danger">
+            {{ "{:,.2f}".format(portfolio_at_risk) }}
+          </h4>
+        </div>
+      </div>
+    </div>
+
+    <div class="col-md-4">
+      <div class="card shadow-sm border-warning">
+        <div class="card-body">
+          <h6>PAR %</h6>
+          <h2 class="text-warning">
+            {{ par_percentage }}%
+          </h2>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+</div>
+
+{% endblock %}
