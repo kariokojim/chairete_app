@@ -1467,9 +1467,44 @@ def upload_loan_repayments():
         )
 
     return render_template("admin/upload_loan_repayments.html", form=form)
+##PAR dashboard
+def get_par_metrics():
+    sql = """
+    WITH arrears_loans AS (
+        SELECT DISTINCT l.loan_no, l.balance
+        FROM loans l
+        JOIN loan_schedules ls
+            ON ls.loan_no = l.loan_no
+        WHERE
+            l.status IN ('Active')
+            AND ls.due_date < CURRENT_DATE
+            AND (
+                COALESCE(ls.principal_paid,0)
+              + COALESCE(ls.interest_paid,0)
+            ) < (
+                COALESCE(ls.principal_due,0)
+              + COALESCE(ls.interest_due,0)
+            )
+    )
+    SELECT
+        (SELECT SUM(balance)
+         FROM loans
+         WHERE status IN ('Active')
+        ) AS total_portfolio,
 
-    
-    #dashboardrds
+        (SELECT SUM(balance)
+         FROM arrears_loans
+        ) AS portfolio_at_risk;
+    """
+    r = db.session.execute(text(sql)).fetchone()
+
+    total = r.total_portfolio or 0
+    risk = r.portfolio_at_risk or 0
+    par = round((risk / total * 100), 2) if total else 0
+
+    return total, risk, par   
+
+#dashboardrds
 @admin_bp.route('/dashboard')
 @login_required
 def dashboard():
@@ -1481,7 +1516,7 @@ def dashboard():
     # Helper to format money
     def fmt(n):
         return f"{float(n or 0):,.2f}"
-
+    total_portfolio, portfolio_at_risk, par_percentage = get_par_metrics()
     # ----------------------------
     # 1. TOTAL MEMBERS
     # ----------------------------
@@ -1600,7 +1635,13 @@ def dashboard():
         interest_arrears=fmt(interest_arrears),
 
         loans_not_paid_2_months=loans_not_paid_2_months,
+        total_portfolio=total_portfolio,
+        portfolio_at_risk=portfolio_at_risk,
+        par_percentage=par_percentage
     )
+
+##from sqlalchemy import text
+
 
 # ---------- Savings Statement (PDF) ----------
 @admin_bp.route('/reports/savings-statement', methods=['GET'])
@@ -3358,3 +3399,310 @@ def view_loan_schedules_auto(loan_no):
 
     )
 
+###export loan schedules to PDF
+@admin_bp.route('/loans/<loan_no>/schedules/excel')
+@login_required
+def export_loan_schedules_excel(loan_no):
+    import pandas as pd
+    from flask import send_file
+    from io import BytesIO
+
+    schedules = LoanSchedule.query.filter_by(
+        loan_no=loan_no
+    ).order_by(LoanSchedule.installment_no).all()
+
+    data = [{
+        'Installment': s.installment_no,
+        'Due Date': s.due_date,
+        'Principal Due': s.principal_due,
+        'Interest Due': s.interest_due,
+        'Principal Paid': s.principal_paid or 0,
+        'Interest Paid': s.interest_paid or 0,
+        'Status': s.status
+    } for s in schedules]
+
+    df = pd.DataFrame(data)
+
+    output = BytesIO()
+    df.to_excel(output, index=False, sheet_name='Loan Schedules')
+    output.seek(0)
+
+    return send_file(
+        output,
+        as_attachment=True,
+        download_name=f'loan_schedules_{loan_no}.xlsx',
+        mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    )
+@admin_bp.route('/loans/<loan_no>/schedules/pdf')
+@login_required
+def export_loan_schedules_pdf(loan_no):
+    from reportlab.lib.pagesizes import A4
+    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph
+    from reportlab.lib.styles import getSampleStyleSheet
+    from reportlab.lib import colors
+    from io import BytesIO
+
+    loan = Loan.query.filter_by(loan_no=loan_no).first_or_404()
+    schedules = LoanSchedule.query.filter_by(
+        loan_no=loan_no
+    ).order_by(LoanSchedule.installment_no).all()
+
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=A4)
+
+    styles = getSampleStyleSheet()
+    elements = []
+
+    elements.append(Paragraph(
+        f"<b>Loan Schedules</b><br/>Member: {loan.member_no} | Loan No: {loan.loan_no}",
+        styles['Normal']
+    ))
+
+    table_data = [[
+        'Inst', 'Due Date', 'Principal Due', 'Interest Due',
+        'Principal Paid', 'Interest Paid', 'Status'
+    ]]
+
+    for s in schedules:
+        table_data.append([
+            s.installment_no,
+            s.due_date.strftime('%Y-%m-%d'),
+            f"{s.principal_due:,.2f}",
+            f"{s.interest_due:,.2f}",
+            f"{(s.principal_paid or 0):,.2f}",
+            f"{(s.interest_paid or 0):,.2f}",
+            s.status
+        ])
+
+    table = Table(table_data, repeatRows=1)
+    table.setStyle(TableStyle([
+        ('GRID', (0,0), (-1,-1), 0.5, colors.grey),
+        ('BACKGROUND', (0,0), (-1,0), colors.lightgrey),
+        ('ALIGN', (2,1), (-2,-1), 'RIGHT'),
+    ]))
+
+    elements.append(table)
+    doc.build(elements)
+
+    buffer.seek(0)
+    return send_file(
+        buffer,
+        as_attachment=True,
+        download_name=f'loan_schedules_{loan_no}.pdf',
+        mimetype='application/pdf'
+    )
+
+
+###RECALCULATE INTEREST ON LOANS DUE
+@admin_bp.route('/loans/<loan_no>/recalculate-interest')
+@login_required
+def recalculate_loan_interest(loan_no):
+    loan = Loan.query.filter_by(loan_no=loan_no).first_or_404()
+
+    schedules = LoanSchedule.query.filter_by(
+        loan_no=loan_no,
+        status='DUE'
+    ).order_by(LoanSchedule.installment_no).all()
+
+    if not schedules:
+        flash('No pending schedules to recalculate.', 'info')
+        return redirect(request.referrer)
+
+    remaining_balance = loan.balance
+    monthly_rate = loan.interest_rate / 100 / 12
+
+    for s in schedules:
+        interest = remaining_balance * monthly_rate
+        principal = s.principal_due  # principal unchanged
+
+        s.interest_due = round(interest, 2)
+        remaining_balance -= principal
+
+    db.session.commit()
+    flash('Loan interest recalculated successfully.', 'success')
+
+    return redirect(request.referrer)
+
+
+##ARREARS AS PDF 
+
+@admin_bp.route('/loans/arrears/pdf')
+@login_required
+def export_loan_arrears_pdf():
+    from reportlab.lib.pagesizes import A4
+    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+    from reportlab.lib.styles import getSampleStyleSheet
+    from reportlab.lib import colors
+    from io import BytesIO
+    from datetime import date
+
+    sql = """
+    SELECT
+        a.member_number,
+        a.loan_no,
+        a.monthly_repayment,
+        a.no_of_months_not_paid,
+        a.total_due_amount,
+        a.loan_balance,
+        a.principle_amount,
+        t.last_date_paid
+    FROM (
+        SELECT
+            l.loan_no,
+            l.member_no AS member_number,
+
+            MIN(
+                COALESCE(ls.principal_due,0) + COALESCE(ls.interest_due,0)
+            ) AS monthly_repayment,
+
+            SUM(
+                (COALESCE(ls.principal_due,0) + COALESCE(ls.interest_due,0))
+              - (COALESCE(ls.principal_paid,0) + COALESCE(ls.interest_paid,0))
+            ) AS total_due_amount,
+
+            COUNT(*) AS no_of_months_not_paid,
+
+            l.balance AS loan_balance,
+            l.loan_amount AS principle_amount
+
+        FROM loans l
+        JOIN loan_schedules ls
+            ON ls.loan_no = l.loan_no
+        WHERE
+            l.status IN ('Active')
+            AND ls.due_date < CURRENT_DATE
+            AND (
+                COALESCE(ls.principal_paid,0)
+              + COALESCE(ls.interest_paid,0)
+            ) < (
+                COALESCE(ls.principal_due,0)
+              + COALESCE(ls.interest_due,0)
+            )
+        GROUP BY
+            l.loan_no,
+            l.member_no,
+            l.balance,
+            l.loan_amount
+    ) a
+    LEFT JOIN (
+        SELECT
+            member_no,
+            MAX(bank_txn_date) AS last_date_paid
+        FROM transactions
+        WHERE tran_type IN ('ASSET')
+        GROUP BY member_no
+    ) t ON t.member_no = a.member_number
+    ORDER BY
+        a.no_of_months_not_paid DESC,
+        a.total_due_amount DESC;
+    """
+
+    rows = db.session.execute(text(sql)).fetchall()
+
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=A4)
+
+    styles = getSampleStyleSheet()
+    elements = []
+
+    elements.append(Paragraph(
+        "<b>Loan Arrears Summary Report</b>", styles['Title']
+    ))
+    elements.append(Paragraph(
+        f"Report Date: {date.today().strftime('%Y-%m-%d')}", styles['Normal']
+    ))
+    elements.append(Spacer(1, 12))
+
+    table_data = [[
+        'Member No', 'Loan No', 'Monthly Repayment',
+        'Months in Arrears', 'Total Arrears',
+        'Loan Balance', 'Principal', 'Last Paid'
+    ]]
+
+    total_arrears = 0
+
+    for r in rows:
+        total_arrears += r.total_due_amount or 0
+        table_data.append([
+            r.member_number,
+            r.loan_no,
+            f"{r.monthly_repayment:,.2f}",
+            r.no_of_months_not_paid,
+            f"{r.total_due_amount:,.2f}",
+            f"{r.loan_balance:,.2f}",
+            f"{r.principle_amount:,.2f}",
+            r.last_date_paid.strftime('%Y-%m-%d') if r.last_date_paid else 'Never'
+        ])
+
+    table_data.append([
+        '', '', '', 'TOTAL',
+        f"{total_arrears:,.2f}", '', '', ''
+    ])
+
+    table = Table(table_data, repeatRows=1)
+    table.setStyle(TableStyle([
+        ('GRID', (0,0), (-1,-1), 0.5, colors.grey),
+        ('BACKGROUND', (0,0), (-1,0), colors.lightgrey),
+        ('BACKGROUND', (0,-1), (-1,-1), colors.whitesmoke),
+        ('ALIGN', (2,1), (-2,-2), 'RIGHT'),
+        ('TEXTCOLOR', (4,1), (4,-2), colors.red),
+        ('FONT', (0,0), (-1,0), 'Helvetica-Bold'),
+        ('FONT', (0,-1), (-1,-1), 'Helvetica-Bold'),
+    ]))
+
+    elements.append(table)
+    doc.build(elements)
+
+    buffer.seek(0)
+    return send_file(
+        buffer,
+        as_attachment=True,
+        download_name='loan_arrears_summary.pdf',
+        mimetype='application/pdf'
+    )
+
+
+###Calculate %PAR
+@admin_bp.route('/loans/par')
+@login_required
+def loan_par_view():
+    sql = """
+    WITH arrears_loans AS (
+        SELECT DISTINCT l.loan_no, l.balance
+        FROM loans l
+        JOIN loan_schedules ls
+            ON ls.loan_no = l.loan_no
+        WHERE
+            l.status IN ('Active')
+            AND ls.due_date < CURRENT_DATE
+            AND (
+                COALESCE(ls.principal_paid,0)
+              + COALESCE(ls.interest_paid,0)
+            ) < (
+                COALESCE(ls.principal_due,0)
+              + COALESCE(ls.interest_due,0)
+            )
+    )
+    SELECT
+        (SELECT SUM(balance)
+         FROM loans
+         WHERE status IN ('Active')
+        ) AS total_portfolio,
+
+        (SELECT SUM(balance)
+         FROM arrears_loans
+        ) AS portfolio_at_risk;
+    """
+
+    result = db.session.execute(text(sql)).fetchone()
+
+    total = result.total_portfolio or 0
+    risk = result.portfolio_at_risk or 0
+    par = round((risk / total * 100), 2) if total else 0
+
+    return render_template(
+        'admin/loan_par.html',
+        total_portfolio=total,
+        portfolio_at_risk=risk,
+        par_percentage=par
+    )
