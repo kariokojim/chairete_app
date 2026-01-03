@@ -111,15 +111,17 @@
         </li>
 		  <li class="nav-item">
 				<a class="nav-link" href="{{ url_for('admin.upload_loan_repayments') }}">
-				Upload all Bank Postings
+				Upload Bank Postings
 				</a>
 				</li>
         <li class="nav-item">
           <a class="nav-link" href="{{ url_for('admin.upload_member_savings') }}">
-            Upload Bank Payments(no-loan)
-          </a>
-        </li>
-
+            Upload Payments(no-loan)
+          </a> </li>
+			<li class="nav-item">
+          <a class="nav-link" href="{{ url_for('admin.bank_pdf_form') }}">
+            PDF Statement to Excel
+          </a></li>
         <li class="nav-item">
           <a class="nav-link" href="{{ url_for('admin.repay_loan_from_savings') }}">
             Payment from Savings
@@ -146,11 +148,13 @@
     <div class="collapse" id="loanMenu">
       <ul class="nav flex-column ms-3">
         <li><a class="nav-link" href="{{ url_for('admin.disburse_loan') }}">Disburse Loan</a></li>
-        <li><a class="nav-link" href="{{ url_for('admin.loan_statement_view2') }}">Loan Statement</a></li>
+        <li><a class="nav-link" href="{{ url_for('admin.loan_statement_view2') }}"> View Loan Statement</a></li>
         <li><a class="nav-link" href="{{ url_for('admin.view_member_loan_schedules') }}">View Member Loan Schedules</a></li>
+		<li><a class="nav-link" href="{{ url_for('admin.loans_view') }}">List All Loans</a></li>
+		<li><a class="nav-link" href="{{ url_for('admin.loan_arrears_view') }}">View Loans Arrears </a></li>
         <li><a class="nav-link" href="{{ url_for('admin.upload_loan_repayments') }}">Upload Repayments</a></li>
         <li><a class="nav-link" href="{{ url_for('admin.loan_prepayment') }}">Loan Prepayment</a></li>
-        <li><a class="nav-link" href="{{ url_for('admin.list_loans') }}">List Loans</a></li>
+        
       </ul>
     </div>
   </li>
