@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div class="container-fluid mt-4">
+
+  <h5 class="mb-3">
+    Loan Schedules for Member {{ loan.member_no }}
+    <small class="text-muted">| Loan No: {{ loan.loan_no }}</small>
+  </h5>
+
+  <table class="table table-bordered table-striped table-sm">
+    <thead class="table-dark">
+      <tr>
+        <th>#</th>
+        <th>Due Date</th>
+        <th>Principal Due</th>
+        <th>Interest Due</th>
+        <th>Principal Paid</th>
+        <th>Interest Paid</th>
+        <th>Status</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for s in schedules %}
+      <tr class="{% if s.due_date < today and s.status != 'PAID' %}table-danger{% endif %}">
+        <td>{{ s.installment_no }}</td>
+        <td>{{ s.due_date }}</td>
+        <td class="text-end">{{ "{:,.2f}".format(s.principal_due) }}</td>
+        <td class="text-end">{{ "{:,.2f}".format(s.interest_due) }}</td>
+        <td class="text-end">{{ "{:,.2f}".format(s.principal_paid or 0) }}</td>
+        <td class="text-end">{{ "{:,.2f}".format(s.interest_paid or 0) }}</td>
+        <td>{{ s.status }}</td>
+      </tr>
+      {% else %}
+      <tr>
+        <td colspan="7" class="text-center text-muted">
+          No schedules found for this loan
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <a href="{{ request.referrer or url_for('admin.loans_view') }}"
+     class="btn btn-sm btn-secondary mt-2">
+    ← Back
+  </a>
+
+</div>
+
+{% endblock %}

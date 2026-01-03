@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div class="container-fluid mt-4">
+  <h4 class="mb-3">Loans Overview</h4>
+
+  <div class="table-responsive">
+    <table class="table table-bordered table-striped table-hover">
+      <thead class="table-dark">
+        <tr>
+          <th>Member No</th>
+          <th>Principal Amount</th>
+		  <th>Loan Balance</th>
+		  <th>Disburse Date</th>
+          <th>Monthly Repayment</th>
+          <th>Period (Months)</th>
+          <th>Status</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for loan in loans %}
+        <tr>
+          <td>{{ loan.member_no }}</td>
+          <td class="text-end">{{ "{:,.2f}".format(loan.principal_amount or 0) }}</td>
+		  <td class="text-end">{{ "{:,.2f}".format(loan.balance or 0) }}</td>
+		  <td>{{ loan.disbursed_date.strftime('%Y-%m-%d') if loan.disbursed_date }}</td>
+          <td class="text-end">
+            {{ "{:,.2f}".format(loan.monthly_total_repayment or 0) }}
+          </td>
+          <td class="text-center">{{ loan.loan_period }}</td>
+          <td>
+            <span class="badge 
+              {% if loan.status == 'ACTIVE' %}bg-success
+              {% elif loan.status == 'CLOSED' %}bg-secondary
+              {% else %}bg-danger{% endif %}">
+              {{ loan.status }}
+            </span>
+          </td>
+        </tr>
+        {% else %}
+        <tr>
+          <td colspan="7" class="text-center text-muted">
+            No loans found
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+{% endblock %}

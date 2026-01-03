@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div class="container-fluid mt-4">
+  <h4 class="mb-3 text-danger">Members with Loan Arrears</h4>
+
+  <div class="table-responsive">
+    <table class="table table-bordered table-hover">
+      <thead class="table-danger">
+        <tr>
+          <th>Member No</th>
+		   <th>Loan No</th>
+          <th>Principal Amnt</th>
+          <th>Balance</th>
+          <th>Total Due</th>
+          <th>Months Unpaid</th>
+		   <th>Monthly Inst.</th>
+          <th>Last Payment Date</th>
+		  <th>View Schedules</th>
+
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in arrears %}
+        <tr>
+		  <td>{{ row.member_number }}</td>
+		  <td>{{ row.loan_number }}</td>
+          <td class="text-end">{{ "{:,.2f}".format(row.principle_amount or 0) }}</td>
+          <td class="text-end">{{ "{:,.2f}".format(row.loan_balance or 0) }}</td>
+		  
+          <td class="text-end text-danger fw-bold">
+            {{ "{:,.2f}".format(row.total_due_amount or 0) }}
+          </td>
+          <td class="text-center">
+            <span class="badge bg-danger">
+              {{ row.no_of_months_not_paid }}
+            </span>
+          </td>
+		  <td class="text-end">{{ "{:,.2f}".format(row.monthly_repayment or 0) }}</td>
+          <td>
+            {{ row.last_date_paid.strftime('%Y-%m-%d') if row.last_date_paid else 'Never' }}
+          </td>
+		  <td class="text-center">
+		  <a href="{{ url_for('admin.view_loan_schedules_auto', loan_no=row.loan_number) }}"
+			 class="btn btn-sm btn-outline-primary"> View Schedules
+		  </a>
+		</td>
+        </tr>
+        {% else %}
+        <tr>
+          <td colspan="6" class="text-center text-muted">
+            No members in arrears 🎉
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+{% endblock %}
