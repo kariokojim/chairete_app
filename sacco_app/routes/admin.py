@@ -1229,7 +1229,7 @@ def upload_loan_repayments():
                             credit_amount=remaining,
                             running_balance=gl_savings.balance,
                             reference=txn_ref,
-                            narration=f"Savings control credit - {narration}",
+                            narration=f"Saving control- {narration}",
                             bank_txn_date=txn_date,
                             posted_by=current_user.username
                         ))
@@ -1268,7 +1268,7 @@ def upload_loan_repayments():
                             credit_amount=remaining,
                             running_balance=m_savings.balance,
                             reference=txn_ref,
-                            narration=f"Savings deposit (no overdue) - {narration}",
+                            narration=f"{narration}",
                             bank_txn_date=txn_date,
                             posted_by=current_user.username
                         ))
@@ -1425,7 +1425,7 @@ def upload_loan_repayments():
                             credit_amount=remaining,
                             running_balance=m_savings.balance,
                             reference=txn_ref,
-                            narration=f"Remainder to savings - {narration}",
+                            narration=f"{narration}",
                             bank_txn_date=txn_date,
                             posted_by=current_user.username
                         ))
