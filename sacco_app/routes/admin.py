@@ -850,7 +850,7 @@ def upload_member_savings():
 
         # ✅ Read Excel file
         df = pd.read_excel(file)
-        required_cols = {'bank_txn_date', 'credit_amount', 'narration', 'member_no', 'account_no'}
+        required_cols = {'bank_txn_date', 'credit_amount', 'narration', 'member_no'}
         if not required_cols.issubset(df.columns):
             flash(f"Missing required columns. Expected: {', '.join(required_cols)}", "danger")
             return redirect(url_for('admin.upload_member_savings'))
@@ -864,7 +864,6 @@ def upload_member_savings():
             narration = str(row.get('narration', '')).strip()
             bank_txn_date = row.get('bank_txn_date')
             credit_amount = Decimal(row.get('credit_amount', 0) or 0)
-            account_no = str(row.get('account_no', '')).strip()
 
             try:
                 member = Member.query.filter_by(member_no=member_no).first()
@@ -897,7 +896,7 @@ def upload_member_savings():
                 # Debit Cash
                 cash_acc.balance += credit_amount
                 db.session.add(Transaction(
-                    txn_no=txn_no,
+                    txn_no=f"TXN{uuid.uuid4().hex[:10].upper()}",
                     member_no=member_no,
                     account_no=cash_acc.account_number,
                     gl_account='CASH_ACC',
@@ -905,7 +904,7 @@ def upload_member_savings():
                     debit_amount=credit_amount,
                     credit_amount=Decimal('0'),
                     reference=txn_no,
-                    narration=f"Deposit by {member_no} - {narration}",
+                    narration=f"Deposit by {member_no} ",
                     bank_txn_date=txn_date,
                     posted_by=current_user.username,
                     running_balance=cash_acc.balance
@@ -940,7 +939,7 @@ def upload_member_savings():
                     debit_amount=Decimal('0'),
                     credit_amount=credit_amount,
                     reference=txn_no,
-                    narration=f"{narration} - {member_no}",
+                    narration=f"deposit for {member_no}",
                     bank_txn_date=txn_date,
                     posted_by=current_user.username,
                     running_balance=savings_ctrl_acc.balance,
