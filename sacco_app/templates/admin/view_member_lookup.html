@@ -1,0 +1,142 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="container mt-4">
+
+  <!-- SEARCH FORM -->
+  <div class="card shadow-sm mb-3">
+    <div class="card-body">
+      <h5 class="mb-3">🔍 View Member</h5>
+
+      <form method="post">
+        <div class="row g-2 align-items-end">
+          <div class="col-md-4">
+            <label>Member Number</label>
+            <input class="form-control"
+                   name="member_no"
+                   placeholder="e.g. M001"
+                   required>
+          </div>
+          <div class="col-md-2">
+            <button class="btn btn-primary w-100">
+              Submit
+            </button>
+          </div>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- EMPTY STATE -->
+  {% if not member %}
+    <div class="alert alert-info text-center">
+      Enter a <strong>Member Number</strong> above to view details.
+    </div>
+  {% endif %}
+
+  <!-- MEMBER DATA -->
+  {% if member %}
+
+  <!-- TABS -->
+  <ul class="nav nav-tabs mb-3">
+    <li class="nav-item">
+      <button class="nav-link active"
+              data-bs-toggle="tab"
+              data-bs-target="#tab-profile">
+        👤 Member Profile
+      </button>
+    </li>
+
+    <li class="nav-item">
+      <button class="nav-link"
+              data-bs-toggle="tab"
+              data-bs-target="#tab-nok">
+        👨‍👩‍👧 Next of Kin
+      </button>
+    </li>
+
+    <li class="nav-item">
+      <button class="nav-link"
+              data-bs-toggle="tab"
+              data-bs-target="#tab-beneficiaries">
+        🧾 Beneficiaries
+      </button>
+    </li>
+  </ul>
+
+  <!-- TAB CONTENT -->
+  <div class="tab-content">
+
+    <!-- MEMBER PROFILE -->
+    <div class="tab-pane fade show active" id="tab-profile">
+      <div class="card">
+        <div class="card-body">
+          <p><strong>Member No:</strong> {{ member.member_no }}</p>
+          <p><strong>Name:</strong> {{ member.name }}</p>
+          <p><strong>ID Number:</strong> {{ member.id_no }}</p>
+          <p><strong>Phone:</strong> {{ member.phone }}</p>
+          <p><strong>Email:</strong> {{ member.email or 'N/A' }}</p>
+          <p><strong>Date Joined:</strong>
+            {{ member.joined_date.strftime('%d %b %Y') if member.joined_date else 'N/A' }}
+          </p>
+        </div>
+      </div>
+    </div>
+
+    <!-- NEXT OF KIN -->
+    <div class="tab-pane fade" id="tab-nok">
+      <div class="card">
+        <div class="card-body">
+          {% if next_of_kin %}
+            <p><strong>Name:</strong> {{ next_of_kin.full_name }}</p>
+            <p><strong>Relationship:</strong> {{ next_of_kin.relationship }}</p>
+            <p><strong>Phone:</strong> {{ next_of_kin.phone }}</p>
+          {% else %}
+            <div class="alert alert-warning mb-0">
+              No next of kin recorded.
+            </div>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+
+    <!-- BENEFICIARIES -->
+    <div class="tab-pane fade" id="tab-beneficiaries">
+      <div class="card">
+        <div class="card-body">
+
+          {% if beneficiaries and beneficiaries|length > 0 %}
+            <table class="table table-sm table-bordered">
+              <thead class="table-light">
+                <tr>
+                  <th>Name</th>
+                  <th>Relationship</th>
+                  <th>Contact</th>
+                  <th class="text-end">%</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for b in beneficiaries %}
+                <tr>
+                  <td>{{ b.full_name }}</td>
+                  <td>{{ b.relationship }}</td>
+                  <td>{{ b.contact }}</td>
+                  <td class="text-end">{{ b.percentage }}%</td>
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          {% else %}
+            <div class="alert alert-warning mb-0">
+              No beneficiaries recorded.
+            </div>
+          {% endif %}
+
+        </div>
+      </div>
+    </div>
+
+  </div>
+  {% endif %}
+
+</div>
+{% endblock %}

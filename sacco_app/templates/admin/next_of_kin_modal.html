@@ -1,0 +1,45 @@
+<div class="modal fade" id="nextOfKinModal" tabindex="-1">
+  <div class="modal-dialog">
+    <form method="post" action="{{ url_for('admin.save_next_of_kin') }}">
+		<input type="hidden" name="member_no" id="nok_member_no">
+
+      <div class="modal-content">
+	  
+        <div class="modal-header bg-success text-white">
+          <h5>Add / Edit Next of Kin</h5>
+          <button type="button" class="btn-close btn-close-white"
+                  data-bs-dismiss="modal"></button>
+        </div>
+
+        <div class="modal-body">
+
+          <div class="mb-2">
+            <label>Full Name</label>
+            <input class="form-control" name="full_name" required>
+          </div>
+
+          <div class="mb-2">
+            <label>Relationship</label>
+            <input class="form-control" name="relationship">
+          </div>
+
+          <div class="mb-2">
+            <label>Phone</label>
+            <input class="form-control" name="phone">
+          </div>
+
+          <div class="mb-2">
+            <label>ID Number</label>
+            <input class="form-control" name="id_number">
+          </div>
+
+        </div>
+
+        <div class="modal-footer">
+          <button class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+          <button class="btn btn-success">Save Next of Kin</button>
+        </div>
+      </div>
+    </form>
+  </div>
+</div>

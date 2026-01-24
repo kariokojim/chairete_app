@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div class="container-fluid mt-4">
+  <h5 class="mb-3">📄 Transactions for GL {{ gl_account }}</h5>
+
+  <table class="table table-sm table-bordered table-striped">
+    <thead class="table-dark">
+      <tr>
+        <th>Date</th>
+        <th>Narration</th>
+        <th class="text-end">Debit</th>
+        <th class="text-end">Credit</th>
+        <th class="text-end">Running Balance</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% set running = 0 %}
+      {% for t in transactions %}
+        {% set running = running + (t.debit_amount or 0) - (t.credit_amount or 0) %}
+        <tr>
+          <td>{{ t.created_at.date() }}</td>
+          <td>{{ t.narration }}</td>
+          <td class="text-end">{{ "{:,.2f}".format(t.debit_amount or 0) }}</td>
+          <td class="text-end">{{ "{:,.2f}".format(t.credit_amount or 0) }}</td>
+          <td class="text-end fw-bold">{{ "{:,.2f}".format(running) }}</td>
+        </tr>
+      {% else %}
+        <tr>
+          <td colspan="5" class="text-center text-muted">No transactions</td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <a href="{{ request.referrer }}" class="btn btn-sm btn-secondary">← Back</a>
+</div>
+
+{% endblock %}

@@ -4,6 +4,48 @@
   <div class="card shadow-sm">
     <div class="card-body">
       <h4 class="mb-3">👤 Member Profile</h4>
+<div class="d-flex flex-wrap gap-2 mb-3">
+
+  <!-- Edit Member -->
+ <button class="btn btn-outline-primary btn-sm"
+        data-bs-toggle="modal"
+        data-bs-target="#editMemberModal"
+        onclick='
+          setMemberNo("{{ member.member_no }}");
+          editMember({
+            member_no: "{{ member.member_no }}",
+            name: "{{ member.name }}",
+            phone: "{{ member.phone or "" }}",
+            email: "{{ member.email or "" }}",
+            id_no: "{{ member.id_no or "" }}",
+            congregation: "{{ member.congregation or "" }}",
+            gender: "{{ member.gender or "" }}",
+            dob: "{{ member.dob.strftime("%Y-%m-%d") if member.dob else "" }}",
+            joined_date: "{{ member.joined_date.strftime("%Y-%m-%d") if member.joined_date else "" }}"
+          });
+        '>
+  ✏️ Edit Member
+</button>
+
+
+  <!-- Add / Edit Next of Kin -->
+  <button class="btn btn-outline-success btn-sm"
+          data-bs-toggle="modal"
+          data-bs-target="#nextOfKinModal"
+          onclick="setMemberNo('{{ member.member_no }}')">
+    👨‍👩‍👧 Add Next of Kin
+  </button>
+
+  <!-- Add / Edit Beneficiaries -->
+  <button class="btn btn-outline-warning btn-sm"
+          data-bs-toggle="modal"
+          data-bs-target="#memberEnrichmentModal"
+          onclick="setMemberNo('{{ member.member_no }}')">
+    🧾 Add Beneficiaries
+  </button>
+
+</div>
+
 
       {% if member %}
       <div class="row mb-2">
@@ -16,7 +58,7 @@
         <div class="col-md-6">
           <p><strong>Email:</strong> {{ member.email or 'N/A' }}</p>
           <p><strong>Date Joined:</strong>
-            {{ member.created_at.strftime('%d %b %Y') if member.created_at else 'N/A' }}
+            {{ member.joined_date.strftime('%d %b %Y') if member.joined_date else 'N/A' }}
           </p>
         </div>
       </div>

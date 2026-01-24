@@ -1,73 +1,215 @@
 {% extends "base.html" %}
 {% block content %}
-<div class="container mt-4 mb-5">
-  <div class="card shadow border-0">
-    <div class="card-header bg-primary text-white">
-      <h4 class="fw-bold mb-0">👤 Member Profile</h4>
-    </div>
-    <div class="card-body p-4">
+<div class="container mt-4">
+  <div class="card shadow-sm">
+    <div class="card-body">
 
-      <!-- Member Info -->
-      <div class="row mb-4">
-        <div class="col-md-6">
-          <h5 class="fw-bold text-primary">{{ member.full_name }}</h5>
-          <p><b>Member No:</b> {{ member.member_no }}</p>
-          <p><b>ID Number:</b> {{ member.id_number or 'N/A' }}</p>
-          <p><b>Phone:</b> {{ member.phone_number or 'N/A' }}</p>
-          <p><b>Email:</b> {{ member.email or 'N/A' }}</p>
+      <h4 class="mb-3">
+        👤 Member Profile — {{ member.name }}
+        <small class="text-muted">({{ member.member_no }})</small>
+      </h4>
+
+      <!-- Tabs -->
+      <ul class="nav nav-tabs" role="tablist">
+
+        <li class="nav-item">
+          <button class="nav-link active"
+                  data-bs-toggle="tab"
+                  data-bs-target="#tab-overview">
+            Overview
+          </button>
+        </li>
+
+        <li class="nav-item">
+          <button class="nav-link"
+                  data-bs-toggle="tab"
+                  data-bs-target="#tab-edit">
+            Edit Member
+          </button>
+        </li>
+
+        <li class="nav-item">
+          <button class="nav-link"
+                  data-bs-toggle="tab"
+                  data-bs-target="#tab-nok">
+            Next of Kin
+          </button>
+        </li>
+
+        <li class="nav-item">
+          <button class="nav-link"
+                  data-bs-toggle="tab"
+                  data-bs-target="#tab-beneficiaries">
+            Beneficiaries
+          </button>
+        </li>
+
+      </ul>
+
+      <!-- Tab Content -->
+      <div class="tab-content pt-3">
+
+        <!-- ================= OVERVIEW ================= -->
+        <div class="tab-pane fade show active" id="tab-overview">
+
+          <div class="row">
+            <div class="col-md-6">
+              <p><strong>Name:</strong> {{ member.name }}</p>
+              <p><strong>ID No:</strong> {{ member.id_no }}</p>
+              <p><strong>Phone:</strong> {{ member.phone }}</p>
+            </div>
+            <div class="col-md-6">
+              <p><strong>Email:</strong> {{ member.email or 'N/A' }}</p>
+              <p><strong>Gender:</strong> {{ member.gender or 'N/A' }}</p>
+              <p><strong>Date Joined:</strong>
+                {{ member.joined_date.strftime('%d %b %Y') if member.joined_date else 'N/A' }}
+              </p>
+            </div>
+          </div>
+
+          <hr>
+
+          <h6 class="text-primary">💰 Savings</h6>
+          {% if savings %}
+            <p>Account: {{ savings.account_number }}</p>
+            <p>Balance: KSh {{ "%.2f"|format(savings.balance) }}</p>
+          {% else %}
+            <p class="text-muted">No savings account</p>
+          {% endif %}
+
+          <hr>
+
+          <h6 class="text-primary">📄 Loans</h6>
+          {% if loans %}
+            <table class="table table-sm table-bordered">
+              <thead class="table-light">
+                <tr>
+                  <th>Loan No</th>
+                  <th>Amount</th>
+                  <th>Balance</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for loan in loans %}
+                <tr>
+                  <td>{{ loan.loan_no }}</td>
+                  <td>{{ "%.2f"|format(loan.loan_amount) }}</td>
+                  <td>{{ "%.2f"|format(loan.balance) }}</td>
+                  <td>{{ loan.status }}</td>
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          {% else %}
+            <p class="text-muted">No loans</p>
+          {% endif %}
         </div>
-        <div class="col-md-6">
-          <p><b>Join Date:</b> {{ member.created_at.strftime("%Y-%m-%d") if member.created_at else 'N/A' }}</p>
-          <p><b>Savings Balance:</b> <span class="fw-bold text-success">KSh {{ '{:,.2f}'.format(savings_balance) }}</span></p>
-          <p><b>Total Loan Balance:</b> <span class="fw-bold text-danger">KSh {{ '{:,.2f}'.format(total_loan_balance) }}</span></p>
+
+        <!-- ================= EDIT MEMBER ================= -->
+        <div class="tab-pane fade" id="tab-edit">
+
+          <form method="post" action="{{ url_for('admin.update_member') }}">
+            <input type="hidden" name="member_no" value="{{ member.member_no }}">
+
+            <div class="row g-2">
+              <div class="col-md-6">
+                <label>Full Name</label>
+                <input class="form-control" name="name" value="{{ member.name }}">
+              </div>
+
+              <div class="col-md-6">
+                <label>Phone</label>
+                <input class="form-control" name="phone" value="{{ member.phone }}">
+              </div>
+
+              <div class="col-md-6">
+                <label>Email</label>
+                <input class="form-control" name="email" value="{{ member.email }}">
+              </div>
+
+              <div class="col-md-6">
+                <label>ID Number</label>
+                <input class="form-control" name="id_no" value="{{ member.id_no }}">
+              </div>
+
+              <div class="col-md-6">
+                <label>Gender</label>
+                <select class="form-control" name="gender">
+                  <option value="">-- Select --</option>
+                  <option value="Male" {% if member.gender=='Male' %}selected{% endif %}>Male</option>
+                  <option value="Female" {% if member.gender=='Female' %}selected{% endif %}>Female</option>
+                </select>
+              </div>
+
+              <div class="col-md-6">
+                <label>Date of Birth</label>
+                <input type="date" class="form-control" name="dob"
+                       value="{{ member.dob.strftime('%Y-%m-%d') if member.dob else '' }}">
+              </div>
+            </div>
+
+            <button class="btn btn-success mt-3">
+              Save Changes
+            </button>
+          </form>
         </div>
+
+        <!-- ================= NEXT OF KIN ================= -->
+        <div class="tab-pane fade" id="tab-nok">
+
+          {% if member.next_of_kin %}
+            <p><strong>Name:</strong> {{ member.next_of_kin.full_name }}</p>
+            <p><strong>Relationship:</strong> {{ member.next_of_kin.relationship }}</p>
+            <p><strong>Phone:</strong> {{ member.next_of_kin.phone }}</p>
+          {% else %}
+            <p class="text-muted">No next of kin recorded</p>
+          {% endif %}
+
+          <hr>
+
+          {% include "admin/next_of_kin_form.html" %}
+        </div>
+
+        <!-- ================= BENEFICIARIES ================= -->
+        <div class="tab-pane fade" id="tab-beneficiaries">
+
+          {% if member.beneficiaries.count() %}
+            <table class="table table-sm table-bordered">
+              <thead class="table-light">
+                <tr>
+                  <th>Name</th>
+                  <th>Relationship</th>
+                  <th>Contact</th>
+                  <th>%</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for b in member.beneficiaries %}
+                <tr>
+                  <td>{{ b.full_name }}</td>
+                  <td>{{ b.relationship }}</td>
+                  <td>{{ b.contact }}</td>
+                  <td>{{ b.percentage }}%</td>
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          {% else %}
+            <p class="text-muted">No beneficiaries recorded</p>
+          {% endif %}
+
+          <hr>
+
+          {% include "admin/beneficiaries_form.html" %}
+        </div>
+
       </div>
 
-      <hr>
-
-      <!-- Loans Table -->
-      <h5 class="fw-bold text-primary mb-3">📄 Active Loans</h5>
-      {% if loans %}
-        <table class="table table-bordered table-hover align-middle">
-          <thead class="table-light">
-            <tr>
-              <th>Loan No</th>
-              <th>Amount</th>
-              <th>Balance</th>
-              <th>Period</th>
-              <th>Interest Rate</th>
-              <th>Status</th>
-            </tr>
-          </thead>
-          <tbody>
-            {% for loan in loans %}
-              <tr>
-                <td>{{ loan.loan_no }}</td>
-                <td>KSh {{ '{:,.2f}'.format(loan.loan_amount) }}</td>
-                <td class="text-danger fw-bold">KSh {{ '{:,.2f}'.format(loan.balance) }}</td>
-                <td>{{ loan.loan_period }} months</td>
-                <td>{{ loan.interest_rate }}%</td>
-                <td>{{ loan.status }}</td>
-              </tr>
-            {% endfor %}
-          </tbody>
-        </table>
-      {% else %}
-        <p class="text-muted">No active loans for this member.</p>
-      {% endif %}
-
-      <hr>
-
-      <!-- Actions -->
-      <div class="text-center mt-4">
-        <a href="{{ url_for('admin.savings_statement_form') }}?member_no={{ member.member_no }}" class="btn btn-success me-2">
-          💰 View Savings Statement
-        </a>
-        <a href="{{ url_for('admin.loan_statement_form') }}?member_no={{ member.member_no }}" class="btn btn-primary me-2">
-          📄 View Loan Statement
-        </a>
-        <a href="{{ url_for('admin.search_member_form') }}" class="btn btn-secondary">
-          🔙 Back to Search
+      <div class="mt-3">
+        <a href="{{ url_for('admin.search_member') }}"
+           class="btn btn-secondary">
+          ← Back
         </a>
       </div>
 

@@ -1,12 +1,80 @@
 {% extends "base.html" %}
 {% block content %}
-<div class="container mt-4">
-  <h4>Member List</h4>
 
-  <div id="members-container">
-    {% include "admin/_member_table.html" %}
+<div class="container mt-4">
+  <div class="card shadow-sm">
+    <div class="card-body">
+
+      <h4 class="mb-3">👥 Members List</h4>
+
+      <table class="table table-bordered table-striped table-sm">
+        <thead class="table-dark">
+          <tr>
+            <th>Member No</th>
+            <th>Name</th>
+            <th>Phone</th>
+            <th>Status</th>
+            <th style="width:120px">Action</th>
+          </tr>
+        </thead>
+        <tbody>
+
+          {% for m in members %}
+          <tr>
+            <td>{{ m.member_no }}</td>
+            <td>{{ m.name }}</td>
+            <td>{{ m.phone }}</td>
+            <td>ACTIVE</td>
+            <td class="text-center">
+
+              <!-- 🔥 THIS IS THE IMPORTANT LINK -->
+              <a href="{{ url_for('admin.view_member', member_no=m.member_no) }}"
+                 class="btn btn-sm btn-outline-primary">
+                View
+              </a>
+
+            </td>
+          </tr>
+          {% else %}
+          <tr>
+            <td colspan="5" class="text-center text-muted">
+              No members found
+            </td>
+          </tr>
+          {% endfor %}
+
+        </tbody>
+      </table>
+
+<!-- Pagination Controls -->
+<nav aria-label="Page navigation">
+  <ul class="pagination justify-content-center">
+    {% if members.has_prev %}
+      <li class="page-item">
+        <a class="page-link page-nav" href="{{ url_for('admin.list_members', page=members.prev_num) }}">Previous</a>
+      </li>
+    {% else %}
+      <li class="page-item disabled"><span class="page-link">Previous</span></li>
+    {% endif %}
+
+    <li class="page-item disabled">
+      <span class="page-link">Page {{ members.page }} of {{ members.pages }}</span>
+    </li>
+
+    {% if members.has_next %}
+      <li class="page-item">
+        <a class="page-link page-nav" href="{{ url_for('admin.list_members', page=members.next_num) }}">Next</a>
+      </li>
+    {% else %}
+      <li class="page-item disabled"><span class="page-link">Next</span></li>
+    {% endif %}
+  </ul>
+</nav>
+    </div>
   </div>
 </div>
+
+
 
 <script>
 $(function() {

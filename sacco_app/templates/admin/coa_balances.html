@@ -1,0 +1,134 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div class="container-fluid mt-4">
+  <h4 class="mb-3">📘 Chart of Accounts Balances</h4>
+{% if current_user.role == 'admin' %}
+<form method="post"
+      action="{{ url_for('admin.generate_opening', year=selected_year) }}"
+      class="mb-3"
+      onsubmit="return confirm(
+        'Generate opening balances for {{ selected_year }}?\n\n'
+        + 'This will NOT overwrite existing balances.'
+      );">
+
+  <button type="submit" class="btn btn-warning btn-sm">
+    🔁 Generate Opening Balances for {{ selected_year }}
+  </button>
+</form>
+{% endif %}
+
+  <!-- Opening balance toggle (ONE place only) -->
+  <div class="form-check form-switch mb-3">
+    <input class="form-check-input" type="checkbox"
+           id="toggleOpening" checked>
+    <label class="form-check-label fw-bold" for="toggleOpening">
+      Show Opening Balance
+    </label>
+  </div>
+
+  <!-- Tabs -->
+  <ul class="nav nav-tabs mb-3">
+    <li class="nav-item">
+      <button class="nav-link active"
+              data-bs-toggle="tab"
+              data-bs-target="#ytd">
+        From January
+      </button>
+    </li>
+    <li class="nav-item">
+      <button class="nav-link"
+              data-bs-toggle="tab"
+              data-bs-target="#month">
+        This Month
+      </button>
+    </li>
+    <li class="nav-item">
+      <button class="nav-link"
+              data-bs-toggle="tab"
+              data-bs-target="#today">
+        Today
+      </button>
+    </li>
+  </ul>
+
+  <div class="tab-content border bg-white p-3">
+
+    {% macro coa_table(data, show_change=False) %}
+    <div class="table-responsive">
+      <table class="table table-sm table-bordered table-striped sticky-header">
+        <thead class="table-dark">
+          <tr>
+            <th>GL Account</th>
+            <th class="text-end opening-col">Opening</th>
+            <th class="text-end">Debit</th>
+            <th class="text-end">Credit</th>
+            <th class="text-end">Balance</th>
+            {% if show_change %}
+              <th class="text-end">Change</th>
+            {% endif %}
+          </tr>
+        </thead>
+        <tbody>
+        {% for r in data %}
+          {% set change = comparison.get(r.gl_account, 0) if show_change else None %}
+          <tr>
+            <td>
+              <a href="{{ url_for('admin.coa_transactions', gl_account=r.gl_account) }}"
+                 class="fw-bold text-decoration-none">
+                {{ r.gl_account }}
+              </a>
+            </td>
+
+            <td class="text-end opening-col">
+              {{ "{:,.2f}".format(r.opening) }}
+            </td>
+
+            <td class="text-end">{{ "{:,.2f}".format(r.debit) }}</td>
+            <td class="text-end">{{ "{:,.2f}".format(r.credit) }}</td>
+
+            <td class="text-end fw-bold
+              {% if r.balance < 0 %}text-danger{% else %}text-success{% endif %}">
+              {{ "{:,.2f}".format(r.balance) }}
+            </td>
+
+            {% if show_change %}
+              <td class="text-end
+                {% if change < 0 %}text-danger{% else %}text-success{% endif %}">
+                {{ "{:,.2f}".format(change) }}
+              </td>
+            {% endif %}
+          </tr>
+        {% else %}
+          <tr>
+            <td colspan="{{ 6 if show_change else 5 }}"
+                class="text-center text-muted">
+              No data available
+            </td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% endmacro %}
+
+    <!-- FROM JANUARY -->
+    <div class="tab-pane fade show active" id="ytd">
+      {{ coa_table(ytd) }}
+    </div>
+
+    <!-- THIS MONTH (SHOW CHANGE) -->
+    <div class="tab-pane fade" id="month">
+      {{ coa_table(month, show_change=True) }}
+    </div>
+
+    <!-- TODAY -->
+    <div class="tab-pane fade" id="today">
+      {{ coa_table(today) }}
+    </div>
+
+  </div>
+</div>
+
+{% endblock %}
+

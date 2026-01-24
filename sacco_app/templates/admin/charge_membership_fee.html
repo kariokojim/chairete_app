@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="container mt-4">
+  <div class="card shadow-sm">
+    <div class="card-header bg-warning">
+      <h5>Charge Membership Fee</h5>
+    </div>
+    <div class="card-body">
+
+      <form method="POST" id="feeForm">
+
+        <div class="mb-3">
+          <label>Member No</label>
+          <input type="text" name="member_no" id="member_no" class="form-control" required>
+        </div>
+
+        <div class="mb-3">
+          <label>Member Name</label>
+          <input type="text" id="member_name" class="form-control" readonly>
+        </div>
+
+        <div class="mb-3">
+          <label>Amount</label>
+          <input type="number" name="amount" class="form-control" required>
+        </div>
+
+        <div class="mb-3">
+          <label>Narration</label>
+          <input type="text" name="narration" value="Membership Registration Fee" class="form-control">
+        </div>
+
+        <button class="btn btn-warning">Charge Fee</button>
+      </form>
+
+    </div>
+  </div>
+</div>
+
+<script>
+$(function () {
+
+  function lookupMember() {
+    const memberNo = $('#member_no').val().trim();  // ✅ define first
+    console.log("Looking up:", memberNo);           // ✅ now safe
+
+    const nameField = $('#member_name');
+    const feedback = $('#member_feedback');
+
+    if (memberNo.length < 2) return;
+
+    nameField.val('');
+    feedback.text('Looking up member...').removeClass('text-danger');
+
+    $.get(`/admin/members/lookup/${memberNo}`)
+      .done(function (res) {
+        console.log("Lookup response:", res);
+
+        if (res.found) {
+          nameField.val(res.name);
+          feedback.text('');
+        } else {
+          feedback.text('Member not found').addClass('text-danger');
+        }
+      })
+      .fail(function (xhr) {
+        console.error("Lookup failed:", xhr.responseText);
+        feedback.text('Lookup failed').addClass('text-danger');
+      });
+  }
+
+  // 🔑 Trigger lookup
+  $('#member_no').on('keyup change blur', lookupMember);
+
+});
+</script>
+{% endblock %}

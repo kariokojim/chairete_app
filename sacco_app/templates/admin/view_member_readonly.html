@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="container mt-4">
+  <div class="card shadow-sm">
+    <div class="card-body">
+
+      <h4 class="mb-3">👤 Member Profile (View)</h4>
+
+      <div class="d-flex flex-wrap gap-2 mb-3">
+
+        <button class="btn btn-outline-primary btn-sm"
+                data-bs-toggle="modal"
+                data-bs-target="#viewMemberModal">
+          👤 View Member Details
+        </button>
+
+        <button class="btn btn-outline-success btn-sm"
+                data-bs-toggle="modal"
+                data-bs-target="#viewNextOfKinModal">
+          👨‍👩‍👧 View Next of Kin
+        </button>
+
+        <button class="btn btn-outline-warning btn-sm"
+                data-bs-toggle="modal"
+                data-bs-target="#viewBeneficiariesModal">
+          🧾 View Beneficiaries
+        </button>
+
+      </div>
+
+      <hr>
+
+      <div class="row mb-2">
+        <div class="col-md-6">
+          <p><strong>Member No:</strong> {{ member.member_no }}</p>
+          <p><strong>Name:</strong> {{ member.name }}</p>
+          <p><strong>Phone:</strong> {{ member.phone }}</p>
+        </div>
+        <div class="col-md-6">
+          <p><strong>Email:</strong> {{ member.email or 'N/A' }}</p>
+          <p><strong>Date Joined:</strong>
+            {{ member.joined_date.strftime('%d %b %Y') if member.joined_date else 'N/A' }}
+          </p>
+        </div>
+      </div>
+
+      <div class="mt-4">
+        <a href="{{ url_for('admin.search_member') }}"
+           class="btn btn-secondary">
+          ← Back
+        </a>
+      </div>
+
+    </div>
+  </div>
+</div>
+{% endblock %}

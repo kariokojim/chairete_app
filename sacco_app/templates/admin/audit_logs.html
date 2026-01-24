@@ -1,46 +1,36 @@
 {% extends "base.html" %}
 {% block content %}
+<div class="container mt-4">
+  <div class="card shadow-sm">
+    <div class="card-body">
+      <h5>🕵️ Audit Logs</h5>
 
-<div class="container-fluid mt-4">
+      <table class="table table-sm table-bordered">
+        <thead class="table-dark">
+          <tr>
+            <th>Time</th>
+            <th>User</th>
+            <th>Action</th>
+            <th>Entity</th>
+            <th>Event</th>
+            <th>IP</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for log in logs %}
+          <tr>
+            <td>{{ log.timestamp.strftime('%d-%b-%Y %H:%M') }}</td>
+            <td>{{ log.user.username if log.user else 'SYSTEM' }}</td>
+            <td>{{ log.action }}</td>
+            <td>{{ log.entity_type }} : {{ log.entity_id }}</td>
+            <td>{{ log.event_type }}</td>
+            <td>{{ log.ip_address }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
 
-    <div class="d-flex justify-content-between align-items-center mb-3">
-        <h3 class="fw-bold text-primary">Audit Logs</h3>
-        <a href="{{ url_for('admin.export_audit_logs') }}" class="btn btn-success">
-            Export to Excel
-        </a>
     </div>
-
-    <div class="card shadow-sm">
-        <div class="card-body">
-
-            <table class="table table-bordered table-striped table-hover">
-                <thead class="table-dark">
-                    <tr>
-                        <th style="width: 150px;">User</th>
-                        <th style="width: 120px;">Action</th>
-                        <th>Details</th>
-                        <th style="width: 130px;">IP Address</th>
-                        <th style="width: 200px;">Timestamp</th>
-                    </tr>
-                </thead>
-
-                <tbody>
-                    {% for log in logs %}
-                    <tr>
-                        <td>{{ log.user.username if log.user else 'SYSTEM' }}</td>
-                        <td>{{ log.action }}</td>
-                        <td>{{ log.details }}</td>
-                        <td>{{ log.ip_address }}</td>
-                        <td>{{ log.timestamp.strftime('%Y-%m-%d %H:%M:%S') }}</td>
-                    </tr>
-                    {% endfor %}
-                </tbody>
-
-            </table>
-
-        </div>
-    </div>
-
+  </div>
 </div>
-
 {% endblock %}

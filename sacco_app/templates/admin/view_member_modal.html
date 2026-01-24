@@ -1,0 +1,31 @@
+<div class="modal fade" id="viewMemberModal" tabindex="-1">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-content">
+
+      <div class="modal-header bg-primary text-white">
+        <h5>Member Details</h5>
+        <button class="btn-close btn-close-white"
+                data-bs-dismiss="modal"></button>
+      </div>
+
+      <div class="modal-body">
+        <table class="table table-sm table-bordered">
+          <tr><th>Member No</th><td>{{ member.member_no }}</td></tr>
+          <tr><th>Name</th><td>{{ member.name }}</td></tr>
+          <tr><th>ID No</th><td>{{ member.id_no }}</td></tr>
+          <tr><th>Phone</th><td>{{ member.phone }}</td></tr>
+          <tr><th>Email</th><td>{{ member.email or 'N/A' }}</td></tr>
+          <tr><th>Gender</th><td>{{ member.gender or 'N/A' }}</td></tr>
+          <tr><th>DOB</th>
+              <td>{{ member.dob.strftime('%d %b %Y') if member.dob else 'N/A' }}</td>
+          </tr>
+          <tr><th>Congregation</th><td>{{ member.congregation or 'N/A' }}</td></tr>
+          <tr><th>Date Joined</th>
+              <td>{{ member.joined_date.strftime('%d %b %Y') if member.joined_date else 'N/A' }}</td>
+          </tr>
+        </table>
+      </div>
+
+    </div>
+  </div>
+</div>

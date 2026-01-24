@@ -1,0 +1,71 @@
+<div class="modal fade" id="editMemberModal" tabindex="-1">
+  <div class="modal-dialog modal-lg">
+    <form method="post" action="{{ url_for('admin.update_member') }}">
+      <input type="hidden" name="member_no" id="edit_member_no">
+
+      <div class="modal-content">
+        <div class="modal-header bg-primary text-white">
+          <h5>Edit Member Details</h5>
+          <button type="button" class="btn-close btn-close-white"
+                  data-bs-dismiss="modal"></button>
+        </div>
+
+        <div class="modal-body">
+
+          <div class="row g-2">
+            <div class="col-md-6">
+              <label>Full Name</label>
+              <input class="form-control" name="name" required>
+            </div>
+
+            <div class="col-md-6">
+              <label>Phone</label>
+              <input class="form-control" name="phone">
+            </div>
+
+            <div class="col-md-6">
+              <label>Email</label>
+              <input class="form-control" name="email">
+            </div>
+
+            <div class="col-md-6">
+              <label>ID Number</label>
+              <input class="form-control" name="id_no">
+            </div>
+
+            <div class="col-md-6">
+              <label>Date of Birth</label>
+              <input type="date" class="form-control" name="dob">
+            </div>
+
+            <div class="col-md-6">
+              <label>Gender</label>
+              <select class="form-control" name="gender">
+                <option value="">-- Select --</option>
+                <option value="Male">Male</option>
+                <option value="Female">Female</option>
+              </select>
+            </div>
+
+            <div class="col-md-6">
+              <label>Congregation</label>
+              <input class="form-control" name="congregation">
+            </div>
+
+            <div class="col-md-6">
+              <label>Date Joined</label>
+              <input type="date" class="form-control" name="joined_date">
+            </div>
+          </div>
+
+        </div>
+
+        <div class="modal-footer">
+          <button class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+          <button class="btn btn-success">Save Changes</button>
+        </div>
+      </div>
+    </form>
+  </div>
+</div>
+

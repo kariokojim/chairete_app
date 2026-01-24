@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div class="container mt-4">
+  <div class="card shadow-sm">
+    <div class="card-body">
+
+      <h4 class="mb-3">👥 Members</h4>
+
+      <table class="table table-bordered table-striped table-sm">
+        <thead class="table-dark">
+          <tr>
+            <th>Member No</th>
+            <th>Name</th>
+            <th>Phone</th>
+            <th>Status</th>
+            <th style="width:120px">Action</th>
+          </tr>
+        </thead>
+        <tbody>
+
+          {% for m in members %}
+          <tr>
+            <td>{{ m.member_no }}</td>
+            <td>{{ m.name }}</td>
+            <td>{{ m.phone }}</td>
+            <td>ACTIVE</td>
+            <td class="text-center">
+
+              <!-- 🔥 THIS IS THE IMPORTANT LINK -->
+              <a href="{{ url_for('admin.view_member', member_no=m.member_no) }}"
+                 class="btn btn-sm btn-outline-primary">
+                View
+              </a>
+
+            </td>
+          </tr>
+          {% else %}
+          <tr>
+            <td colspan="5" class="text-center text-muted">
+              No members found
+            </td>
+          </tr>
+          {% endfor %}
+
+        </tbody>
+      </table>
+
+    </div>
+  </div>
+</div>
+
+{% endblock %}
