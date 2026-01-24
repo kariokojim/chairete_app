@@ -9,4 +9,8 @@ class Config:
     WTF_CSRF_SECRET_KEY = 'something-secure'
     WTF_CSRF_IGNORE_EXEMPT = True
     WTF_I18N_ENABLED = False
+    SMTP_USER = "sewatyventures@gmail.com"
+    SMTP_PASSWORD = "cpah wnrt hjkd lvns"
+    MAX_FAILED_LOGINS = 5
+    LOCKOUT_MINUTES = 15
 
