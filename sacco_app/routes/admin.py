@@ -1,3 +1,4 @@
+from sacco_app.utils.audit import log_activity
 from flask import Blueprint, render_template, redirect, url_for, flash, request,jsonify,send_file
 from flask_login import login_required,current_user
 from datetime import datetime, timedelta
@@ -21,6 +22,14 @@ import os
 from datetime import datetime
 from flask import current_app
 from sqlalchemy import text   
+from sacco_app.models import NextOfKin, Beneficiary
+from sacco_app.utils.receipt_utils import generate_receipt_no
+
+from sacco_app.utils.async_tasks import run_async
+from sacco_app.utils.receipt_tasks import send_receipt_background
+
+
+
 
 
 def role_required_admin():
@@ -34,9 +43,11 @@ admin_bp = Blueprint('admin', __name__, url_prefix='/admin')
 @admin_bp.route('/users/list', methods=['GET'])
 @login_required
 def list_users():
-    if not role_required_admin():
-        return 'forbidden', 403
-    users = User.query.all()
+    if current_user.role != 'admin':
+        flash("You are not authorized to view user management.", "danger")
+        return redirect(request.referrer or url_for('admin.dashboard'))
+
+    users = User.query.order_by(User.created_at.desc()).all()
     return render_template('admin/list_users.html', users=users)
 
 
@@ -44,6 +55,9 @@ def list_users():
 @admin_bp.route('/users/create', methods=['GET', 'POST'])
 @login_required
 def create_user():
+    if current_user.role != 'admin':
+        flash("You are not authorized to Create a new user.", "danger")
+        return redirect(request.referrer or url_for('admin.dashboard'))
     form = UserForm()
 
     if form.validate_on_submit():
@@ -243,7 +257,7 @@ def post_savings_transaction():
         cash_acc.balance += amount
         cash_acc_running_balance=cash_acc.balance
         txn1 = Transaction(
-            txn_no=txn_no,
+            txn_no=f"TXN{uuid.uuid4().hex[:10].upper()}",
             member_no=member_no,
             account_no=account_no_cash_acc,
             gl_account='CASH_ACC',
@@ -260,9 +274,8 @@ def post_savings_transaction():
 
         # Credit Member Savings Account
         member_savings_acc.balance += amount
-        txn_no2 = f"TXN{uuid.uuid4().hex[:10].upper()}"
         txn2 = Transaction(
-            txn_no=txn_no2,
+            txn_no=f"TXN{uuid.uuid4().hex[:10].upper()}",
             member_no=member_no,
             account_no=member_savings_acc.account_number,
             gl_account='SAVINGS',
@@ -301,14 +314,49 @@ def post_savings_transaction():
         for t in transactions:
             db.session.add(t)
         db.session.commit()
+        flash(f"✅ KES {amount:,.2f} successfully posted to {member_no}", "success")
 
-        flash(f"Deposit of {amount:.2f} posted successfully for member {member_no}.", "success")
+        # -------------------------------------------------
+        # 1️⃣ Find the MEMBER savings credit transaction
+        # -------------------------------------------------
+        member_txn = None
+        for t in transactions:
+            if t.account_no == member_savings_acc.account_number and t.credit_amount > 0:
+                member_txn = t
+                break
+
+        if not member_txn:
+            flash("Deposit posted but receipt could not be generated.", "warning")
+            return redirect(url_for('admin.list_member_deposits'))
+
+        # -------------------------------------------------
+        # 2️⃣ Fetch member
+        # -------------------------------------------------
+        member = Member.query.filter_by(member_no=member_txn.member_no).first()
+
+        # -------------------------------------------------
+        # 3️⃣ Queue receipt + email in background
+        # -------------------------------------------------
+        if member and member.email:
+            receipt_no = generate_receipt_no()
+
+            run_async(
+                current_app._get_current_object(),
+                send_receipt_background,
+                member,
+                member_txn,
+                receipt_no
+            )
+
+        else:
+            flash("Deposit posted but member has no email for receipt.", "warning")
+
 
     except Exception as e:
         db.session.rollback()
         flash(f"Error posting deposit: {str(e)}", "danger")
 
-    return redirect(url_for('admin.list_member_deposits'))
+    return redirect(url_for('admin.post_transaction'))
     
  #list member deposits
 
@@ -384,7 +432,7 @@ def disburse_loan():
     """Loan disbursement route – creates loan, GL entries, guarantors, and schedules."""
     from decimal import Decimal
     from dateutil.relativedelta import relativedelta
-    from datetime import datetime
+    from datetime import datetime,time
     import uuid, re
 
     from sacco_app import db
@@ -864,6 +912,7 @@ def upload_member_savings():
             narration = str(row.get('narration', '')).strip()
             bank_txn_date = row.get('bank_txn_date')
             credit_amount = Decimal(row.get('credit_amount', 0) or 0)
+           
 
             try:
                 member = Member.query.filter_by(member_no=member_no).first()
@@ -896,7 +945,7 @@ def upload_member_savings():
                 # Debit Cash
                 cash_acc.balance += credit_amount
                 db.session.add(Transaction(
-                    txn_no=f"TXN{uuid.uuid4().hex[:10].upper()}",
+                    txn_no=txn_no,
                     member_no=member_no,
                     account_no=cash_acc.account_number,
                     gl_account='CASH_ACC',
@@ -904,7 +953,7 @@ def upload_member_savings():
                     debit_amount=credit_amount,
                     credit_amount=Decimal('0'),
                     reference=txn_no,
-                    narration=f"Deposit by {member_no} ",
+                    narration=f"Deposit by {member_no} - {narration}",
                     bank_txn_date=txn_date,
                     posted_by=current_user.username,
                     running_balance=cash_acc.balance
@@ -939,7 +988,7 @@ def upload_member_savings():
                     debit_amount=Decimal('0'),
                     credit_amount=credit_amount,
                     reference=txn_no,
-                    narration=f"deposit for {member_no}",
+                    narration=f"Deposit for - {member_no}",
                     bank_txn_date=txn_date,
                     posted_by=current_user.username,
                     running_balance=savings_ctrl_acc.balance,
@@ -1228,7 +1277,7 @@ def upload_loan_repayments():
                             credit_amount=remaining,
                             running_balance=gl_savings.balance,
                             reference=txn_ref,
-                            narration=f"Saving control- {narration}",
+                            narration=f"Savings control- {narration}",
                             bank_txn_date=txn_date,
                             posted_by=current_user.username
                         ))
@@ -1424,7 +1473,7 @@ def upload_loan_repayments():
                             credit_amount=remaining,
                             running_balance=m_savings.balance,
                             reference=txn_ref,
-                            narration=f"{narration}",
+                            narration=f"Remainder to savings - {narration}",
                             bank_txn_date=txn_date,
                             posted_by=current_user.username
                         ))
@@ -2375,7 +2424,9 @@ def repay_loan_from_savings():
         # --- Get GL Accounts
         loan_principal_acc = SaccoAccount.query.filter_by(member_no=member_no,account_type='LOAN').first()
         loan_control_acc = SaccoAccount.query.filter_by(account_number='M000GL_LOAN').first()
-        interest_income_acc = SaccoAccount.query.filter_by(account_number='M000GL_LN_INT').first()
+        interest_control_acc = SaccoAccount.query.filter_by(account_number='M000GL_LN_INT').first()
+        interest_income_acc = SaccoAccount.query.filter_by(member_no=member_no,account_type='INTEREST').first()
+
         savings_control_acc = SaccoAccount.query.filter_by(account_number='M000GL_SAVINGS').first()
 
         if not all([loan_principal_acc, interest_income_acc, savings_control_acc, loan_control_acc]):
@@ -2384,7 +2435,7 @@ def repay_loan_from_savings():
 
         due_schedule = LoanSchedule.query.filter(
             LoanSchedule.loan_no == loan.loan_no,
-            LoanSchedule.status == 'DUE'
+            LoanSchedule.status != 'PAID'
         ).order_by(LoanSchedule.due_date).first()
 
         if not due_schedule:
@@ -2443,18 +2494,35 @@ def repay_loan_from_savings():
                 txn_no=f"TXN{uuid.uuid4().hex[:10].upper()}",
                 member_no=member_no,
                 account_no=interest_income_acc.account_number,
-                gl_account='INTEREST_INCOME',
+                gl_account='MEMBER_INTEREST',
                 tran_type='INCOME',
-                debit_amount=Decimal('0'),
-                credit_amount=pay_interest,
+                debit_amount=pay_interest,
+                credit_amount=Decimal('0'),
                 reference=txn_ref,
-                narration=f"Interest repayment - {member_no}",
+                narration=f"Interest Paid - {member_no}",
                 bank_txn_date=txn_date,
                 posted_by=current_user.username,
                 running_balance=interest_income_acc.balance
             )
             transactions.append(txn_int)
 
+            interest_control_acc.balance += pay_interest
+
+            txn_int = Transaction(
+                txn_no=f"TXN{uuid.uuid4().hex[:10].upper()}",
+                member_no="M000GL",
+                account_no=interest_control_acc.account_number,
+                gl_account='LOAN_INTEREST_CONTROL',
+                tran_type='INCOME',
+                debit_amount=Decimal('0'),
+                credit_amount=pay_interest,
+                reference=txn_ref,
+                narration=f"Interest Paid - {member_no}",
+                bank_txn_date=txn_date,
+                posted_by=current_user.username,
+                running_balance=interest_control_acc.balance
+            )
+            transactions.append(txn_int)
         # 4️⃣ Pay Principal (reduce loan & loan control)
         principal_due = due_schedule.principal_due - due_schedule.principal_paid
         if remaining > 0 and principal_due > 0:
@@ -2475,7 +2543,7 @@ def repay_loan_from_savings():
                 debit_amount=Decimal('0'),
                 credit_amount=pay_principal,
                 reference=txn_ref,
-                narration=f"Loan control credit for {member_no}",
+                narration=f"Loan principal repayment from savings- {member_no}",
                 bank_txn_date=txn_date,
                 posted_by=current_user.username,
                 running_balance=loan_control_acc.balance
@@ -2487,12 +2555,12 @@ def repay_loan_from_savings():
                 txn_no=f"TXN{uuid.uuid4().hex[:10].upper()}",
                 member_no=member_no,
                 account_no=loan_principal_acc.account_number,
-                gl_account='LOAN_PRINCIPAL',
+                gl_account='MEMBER_LOAN',
                 tran_type='ASSET',
                 debit_amount=pay_principal,
                 credit_amount=Decimal('0'),
                 reference=txn_ref,
-                narration=f"Loan principal repayment - {member_no}",
+                narration=f"Principal paid for {member_no}",
                 bank_txn_date=txn_date,
                 posted_by=current_user.username,
                 running_balance=loan_principal_acc.balance
@@ -2553,9 +2621,9 @@ def reverse_transaction():
 
             # Update account running balance
             if debit > 0:
-                acc.balance += debit
+                acc.balance -= debit
             if credit > 0:
-                acc.balance -= credit
+                acc.balance += credit
 
             # Create reversal transaction
             rev = Transaction(
@@ -2567,7 +2635,7 @@ def reverse_transaction():
                 debit_amount=debit,
                 credit_amount=credit,
                 reference=reversal_ref,
-                narration=f"Reversal of {txn.txn_no}: {reason}",
+                narration=f"Reversal-{reason}",
                 bank_txn_date=datetime.now(),
                 posted_by=current_user.username,
                 running_balance=acc.balance,
@@ -2791,26 +2859,11 @@ def gl_report():
 
 
 #### auditing
-def log_activity(action, details=None):
-    from flask import request
-    from sacco_app.models import AuditLog
 
-    ip = request.remote_addr
-    
-    log = AuditLog(
-        user_id=current_user.id,
-        action=action,
-        details=details,
-        ip_address=ip
-    )
-    db.session.add(log)
-    db.session.commit()
-
-
-@admin_bp.route('/audit_logs')
+@admin_bp.route('/audit-logs')
 @login_required
 def audit_logs():
-    logs = AuditLog.query.order_by(AuditLog.timestamp.desc()).all()
+    logs = AuditLog.query.order_by(AuditLog.timestamp.desc()).limit(500).all()
     return render_template("admin/audit_logs.html", logs=logs)
 
 
@@ -3704,4 +3757,688 @@ def loan_par_view():
         total_portfolio=total,
         portfolio_at_risk=risk,
         par_percentage=par
+    )
+@admin_bp.route('/members/beneficiaries', methods=['POST'])
+@login_required
+def save_beneficiaries():
+    member_no = request.form.get('member_no')
+    if not member_no:
+        flash('Member not specified', 'danger')
+        return redirect(request.referrer)
+
+    names = request.form.getlist('ben_full_name[]')
+    relations = request.form.getlist('ben_relationship[]')
+    contacts = request.form.getlist('ben_contact[]')
+    percentages = request.form.getlist('ben_percentage[]')
+
+    # ---------- BASIC VALIDATION ----------
+    if not names:
+        flash('Please add at least one beneficiary', 'danger')
+        return redirect(request.referrer)
+
+    if not (len(names) == len(relations) == len(contacts) == len(percentages)):
+        flash('Beneficiary rows are inconsistent. Please review.', 'danger')
+        return redirect(request.referrer)
+
+    # ---------- FIELD-LEVEL VALIDATION ----------
+    total_percentage = 0
+    beneficiaries_data = []
+
+    for i in range(len(names)):
+        name = names[i].strip()
+        relationship = relations[i].strip()
+        contact = contacts[i].strip()
+        percentage = percentages[i]
+
+        if not name or not relationship or not contact or not percentage:
+            flash('All beneficiary fields are required', 'danger')
+            return redirect(request.referrer)
+
+        try:
+            percentage = float(percentage)
+        except ValueError:
+            flash('Invalid percentage value', 'danger')
+            return redirect(request.referrer)
+
+        if percentage <= 0:
+            flash('Beneficiary percentage must be greater than zero', 'danger')
+            return redirect(request.referrer)
+
+        total_percentage += percentage
+
+        beneficiaries_data.append({
+            "full_name": name,
+            "relationship": relationship,
+            "contact": contact,
+            "percentage": percentage
+        })
+
+    # ---------- BUSINESS RULE ----------
+    if round(total_percentage, 2) != 100.00:
+        flash('Total beneficiary percentage must be exactly 100%', 'danger')
+        return redirect(request.referrer)
+
+    # ---------- SAVE ----------
+    Beneficiary.query.filter_by(member_no=member_no).delete()
+
+    for b in beneficiaries_data:
+        ben = Beneficiary(
+            member_no=member_no,
+            full_name=b["full_name"],
+            relationship=b["relationship"],
+            contact=b["contact"],
+            percentage=b["percentage"]
+        )
+        db.session.add(ben)
+
+    # ---------- AUDIT ----------
+    log_activity(
+        action="Updated beneficiaries",
+        entity_type="BENEFICIARY",
+        entity_id=member_no,
+        event_type="UPDATE",
+        details=f"{len(beneficiaries_data)} beneficiaries saved",
+        after_data=beneficiaries_data
+    )
+
+    db.session.commit()
+    flash('Beneficiaries updated successfully', 'success')
+    return redirect(request.referrer)
+
+
+
+## ADD NEXT OF KINS
+
+@admin_bp.route('/members/next-of-kin', methods=['POST'])
+@login_required
+def save_next_of_kin():
+    member_no = request.form.get('member_no')
+    if not member_no:
+        flash('Member not specified', 'danger')
+        return redirect(request.referrer)
+
+    member = Member.query.filter_by(member_no=member_no).first()
+    if not member:
+        flash('Invalid member selected', 'danger')
+        return redirect(request.referrer)
+
+    # ✅ MATCH FORM FIELD NAMES
+    full_name = request.form.get('full_name')
+    if not full_name or not full_name.strip():
+        flash('Next of kin full name is required', 'danger')
+        return redirect(request.referrer)
+
+    relationship = request.form.get('relationship')
+    phone = request.form.get('phone')
+    id_number = request.form.get('id_number')
+
+    nok = NextOfKin.query.filter_by(member_no=member_no).first()
+    if not nok:
+        nok = NextOfKin(member_no=member_no)
+        db.session.add(nok)
+
+    nok.full_name = full_name.strip()
+    nok.relationship = relationship.strip() if relationship else None
+    nok.phone = phone.strip() if phone else None
+    nok.id_number = id_number.strip() if id_number else None
+
+    log_activity(
+        action="Saved next of kin",
+        entity_type="NEXT_OF_KIN",
+        entity_id=member_no,
+        event_type="UPDATE",
+        details=f"NOK: {nok.full_name}"
+    )
+
+    db.session.commit()
+    flash('Next of kin saved successfully', 'success')
+    return redirect(request.referrer)
+
+
+##member update
+
+@admin_bp.route('/members/update', methods=['POST'])
+@login_required
+def update_member():
+    print("LOG_ACTIVITY FROM:", log_activity.__module__)
+    print("LOG_ACTIVITY SIG:", __import__("inspect").signature(log_activity))
+
+    member_no = request.form.get('member_no')
+    member = Member.query.filter_by(member_no=member_no).first_or_404()
+
+    before = {
+        "name": member.name,
+        "phone": member.phone,
+        "email": member.email,
+        "id_no": member.id_no
+    }
+
+    member.name = request.form.get('name')
+    member.phone = request.form.get('phone')
+    member.email = request.form.get('email')
+    member.id_no = request.form.get('id_no')
+    member.congregation = request.form.get('congregation')
+    member.gender = request.form.get('gender')
+
+    after = {
+        "name": member.name,
+        "phone": member.phone,
+        "email": member.email,
+        "id_no": member.id_no
+    }
+
+    log_activity(
+        action="Updated member profile",
+        entity_type="MEMBER",
+        entity_id=member.member_no,
+        event_type="UPDATE",
+        before_data=before,
+        after_data=after
+    )
+
+    db.session.commit()
+    flash("Member updated successfully", "success")
+    return redirect(request.referrer)
+
+@admin_bp.route('/members')
+@login_required
+def members_list():
+    members = Member.query.order_by(Member.member_no).all()
+
+    return render_template(
+        'admin/members_list.html',
+        members=members
+    )
+
+
+@admin_bp.route('/view-member', methods=['GET', 'POST'])
+@login_required
+def view_member_lookup():
+    member = None
+    next_of_kin = None
+    beneficiaries = []
+
+    if request.method == 'POST':
+        member_no = request.form.get('member_no')
+
+        member = Member.query.filter_by(member_no=member_no).first()
+
+        if member:
+            next_of_kin = NextOfKin.query.filter_by(member_no=member_no).first()
+            beneficiaries = Beneficiary.query.filter_by(member_no=member_no).all()
+        else:
+            flash('Member not found', 'danger')
+
+    return render_template(
+        'admin/view_member_lookup.html',
+        member=member,
+        next_of_kin=next_of_kin,
+        beneficiaries=beneficiaries
+    )
+
+
+@admin_bp.route('/users/<int:user_id>/unlock', methods=['POST'])
+@login_required
+def unlock_user(user_id):
+    # 🔐 Ensure only admins can unlock
+    if current_user.role != 'admin':
+        flash("Unauthorized action.", "danger")
+        return redirect(request.referrer)
+
+    user = User.query.get_or_404(user_id)
+
+    # Reset lockout fields
+    user.failed_login_attempts = 0
+    user.account_locked_until = None
+    db.session.commit()
+
+    # Audit log
+    log_activity(
+        action="Admin unlocked user account",
+        entity_type="USER",
+        entity_id=user.id,
+        event_type="ACCOUNT_UNLOCKED",
+        details=f"User {user.username} unlocked by admin {current_user.username}",
+        auto_commit=True
+    )
+
+    flash(f"User {user.username} has been unlocked.", "success")
+    return redirect(request.referrer)
+    
+### chart of accounts reports
+
+from datetime import date
+from dateutil.relativedelta import relativedelta
+from sqlalchemy import func
+from flask import render_template
+from sacco_app.extensions import db
+from sacco_app.models.transactions import Transaction
+from sacco_app.models.gl_opening_balance import GLOpeningBalance
+from flask_login import login_required
+
+
+def coa_data(from_date, to_date):
+    rows = (
+        db.session.query(
+            Transaction.gl_account,
+            func.coalesce(func.sum(Transaction.debit_amount), 0).label("debit"),
+            func.coalesce(func.sum(Transaction.credit_amount), 0).label("credit")
+        )
+        .filter(Transaction.created_at.between(from_date, to_date))
+        .group_by(Transaction.gl_account)
+        .all()
+    )
+
+    data = []
+
+    for r in rows:
+        opening = (
+            db.session.query(GLOpeningBalance.opening_balance)
+            .filter(
+                GLOpeningBalance.gl_account == r.gl_account,
+                GLOpeningBalance.year == from_date.year
+            )
+            .scalar()
+        ) or 0
+
+        balance = opening + (r.debit - r.credit)
+
+        data.append({
+            "gl_account": r.gl_account,
+            "opening": opening,
+            "debit": r.debit,
+            "credit": r.credit,
+            "balance": balance
+        })
+
+    return data
+
+
+from datetime import date,time
+@admin_bp.route('/coa-balances')
+@login_required
+def coa_balances():
+        # ✅ ALWAYS define selected_year
+    selected_year = int(request.args.get('year', date.today().year))
+
+    jan_1 = date(selected_year, 1, 1)
+
+    # If viewing current year, stop at today; otherwise Dec 31
+    if selected_year == date.today().year:
+        end_date = date.today()
+    else:
+        end_date = date(selected_year, 12, 31)
+
+    month_start = date(selected_year, end_date.month, 1)
+    today = date.today()
+
+    # -------- DATE RANGES --------
+    jan_1 = date(today.year, 1, 1)
+    month_start = date(today.year, today.month, 1)
+
+    # -------- MAIN DATA --------
+    ytd = coa_data(jan_1, today)
+    month = coa_data(month_start, today)
+    start_today = datetime.combine(date.today(), time.min)
+    end_today = datetime.combine(date.today(), time.max)
+
+    today_data = coa_data(start_today, end_today)
+
+
+    # -------- MONTH vs LAST MONTH --------
+    last_month_start = month_start - relativedelta(months=1)
+    last_month_end = month_start - relativedelta(days=1)
+
+    current_month = {
+        r["gl_account"]: r["debit"] - r["credit"]
+        for r in coa_data(month_start, today)
+    }
+
+    last_month = {
+        r["gl_account"]: r["debit"] - r["credit"]
+        for r in coa_data(last_month_start, last_month_end)
+    }
+
+    comparison = []
+    for gl, current in current_month.items():
+        prev = last_month.get(gl, 0)
+        comparison.append({
+            "gl_account": gl,
+            "change": current - prev
+        })
+
+    return render_template(
+        "admin/coa_balances.html",
+        ytd=ytd,
+        month=month,
+        today=today_data,
+        comparison={c["gl_account"]: c["change"] for c in comparison},
+        selected_year=selected_year
+    )
+
+
+##coa REPORT TOEXCELL
+from datetime import date,time
+from sqlalchemy import func, case
+from openpyxl import Workbook
+from flask import send_file
+import io
+
+@admin_bp.route('/coa/export/<period>')
+@login_required
+def export_coa(period):
+    today = date.today()
+
+    if period == "ytd":
+        from_date = date(today.year, 1, 1)
+    elif period == "month":
+        from_date = date(today.year, today.month, 1)
+    elif period == "today":
+        from_date = today
+    else:
+        flash("Invalid export period", "danger")
+        return redirect(request.referrer)
+
+    rows = (
+        db.session.query(
+            Transaction.gl_account,
+            func.sum(
+                case((Transaction.debit_amount > 0, Transaction.debit_amount), else_=0)
+            ).label("debit"),
+            func.sum(
+                case((Transaction.credit_amount > 0, Transaction.credit_amount), else_=0)
+            ).label("credit"),
+            (
+                func.sum(
+                    case((Transaction.debit_amount > 0, Transaction.debit_amount), else_=0)
+                ) -
+                func.sum(
+                    case((Transaction.credit_amount > 0, Transaction.credit_amount), else_=0)
+                )
+            ).label("balance")
+        )
+        .filter(Transaction.created_at.between(from_date, today))
+        .group_by(Transaction.gl_account)
+        .order_by(Transaction.gl_account)
+        .all()
+    )
+
+    # ---------- Excel ----------
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "COA Balances"
+
+    ws.append(["GL Account", "Debit", "Credit", "Balance"])
+
+    for r in rows:
+        ws.append([
+            r.gl_account,
+            float(r.debit or 0),
+            float(r.credit or 0),
+            float(r.balance or 0)
+        ])
+
+    stream = io.BytesIO()
+    wb.save(stream)
+    stream.seek(0)
+
+    return send_file(
+        stream,
+        as_attachment=True,
+        download_name=f"coa_balances_{period}.xlsx",
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+####COA GL_DRIL DOWN
+
+@admin_bp.route('/coa/<gl_account>/transactions')
+@login_required
+def coa_transactions(gl_account):
+    from datetime import date
+
+    today = date.today()
+    year_start = date(today.year, 1, 1)
+
+    txns = (
+        Transaction.query
+        .filter(
+            Transaction.gl_account == gl_account,
+            Transaction.created_at >= year_start
+        )
+        .order_by(Transaction.created_at.desc())
+        .all()
+    )
+
+    return render_template(
+        "admin/coa_transactions.html",
+        gl_account=gl_account,
+        transactions=txns
+    )
+
+
+from datetime import date
+from sacco_app.services.accounting_service import generate_opening_balances
+from sacco_app.utils.audit import log_activity
+
+## GENERATE OPENING BALANCE
+@admin_bp.route('/coa/generate-opening/<int:year>', methods=['POST'])
+@login_required
+def generate_opening(year):
+    if current_user.role != 'admin':
+        flash("Unauthorized action", "danger")
+        return redirect(request.referrer)
+
+    created = generate_opening_balances(year)
+
+    log_activity(
+        action="Generate opening balances",
+        details=f"Generated {created} opening balances for year {year}"
+    )
+
+    flash(
+        f"Opening balances generated for {year} "
+        f"({created} GL accounts created)",
+        "success"
+    )
+
+    return redirect(url_for('admin.coa_balances', year=year))
+
+## member_lookup
+
+@admin_bp.route('/members/lookup/<member_no>')
+@login_required
+def lookup_member(member_no):
+    member = Member.query.filter_by(member_no=member_no).first()
+    if not member:
+        return {"found": False}
+    return {"found": True, "name": member.name}
+
+#sending sms POSTINGS
+@admin_bp.route("/test-sms")
+def test_sms():
+    from sacco_app.utils.sms import send_sms
+    send_sms("+254721313527", "Hello from Chairete SACCO 🚀")
+    return "SMS sent"
+
+#charging membership fee
+
+@admin_bp.route("/fees/membership", methods=["GET", "POST"])
+@login_required
+def charge_membership_fee():
+    if request.method == "GET":
+        return render_template("admin/charge_membership_fee.html")
+
+    member_no = request.form["member_no"]
+    amount = Decimal(request.form["amount"])
+    narration = request.form["narration"]
+
+    member = Member.query.filter_by(member_no=member_no).first()
+    savings = SaccoAccount.query.filter_by(member_no=member_no, account_type="SAVINGS").first()
+    reg_fee = SaccoAccount.query.filter_by(account_number="M000GL_REG_FEE").first()
+
+    if not member or not savings or savings.balance < amount:
+        flash("Invalid member or insufficient savings", "danger")
+        return redirect(request.url)
+
+    txn_no = f"TXN{uuid.uuid4().hex[:10].upper()}"
+    txn_date = datetime.now()
+
+    # Debit member savings
+    savings.balance -= amount
+    txn1 = Transaction(
+        txn_no=f"TXN{uuid.uuid4().hex[:10].upper()}",
+        member_no=member_no,
+        account_no=savings.account_number,
+        gl_account='SAVINGS',
+        tran_type='SAVINGS',
+        debit_amount=amount,
+        credit_amount=Decimal('0'),
+        reference=txn_no,
+        narration=narration,
+        bank_txn_date=txn_date,
+        posted_by=current_user.username,
+        running_balance=savings.balance,
+        created_at=txn_date
+    )
+
+    # Credit registration fee income
+    reg_fee.balance += amount
+    txn2 = Transaction(
+        txn_no=f"TXN{uuid.uuid4().hex[:10].upper()}",
+        member_no="M000GL",
+        account_no=reg_fee.account_number,
+        gl_account='REGFEE',
+        tran_type='INCOME',
+        debit_amount=Decimal('0'),
+        credit_amount=amount,
+        reference=txn_no,
+        narration=f"{narration} - {member_no}",
+        bank_txn_date=txn_date,
+        posted_by=current_user.username,
+        running_balance=reg_fee.balance,
+        created_at=txn_date
+    )
+
+    db.session.add_all([txn1, txn2])
+    db.session.commit()
+
+    flash(f"KES {amount:,.2f} membership fee charged to {member_no}", "success")
+    return redirect(url_for("admin.charge_membership_fee"))
+
+##GUARATORS VIEW
+@admin_bp.route('/member-guarantees', methods=['GET', 'POST'])
+@login_required
+def member_guarantees():
+    member_no = None
+    guarantees = []
+    total_guaranteed = 0
+
+    if request.method == 'POST':
+        member_no = request.form.get('member_no').strip()
+
+        sql = text("""
+            SELECT 
+                lg.loan_no,
+                lg.member_no AS borrower_no,
+                lg.amount_guaranteed,
+                m.name AS borrower_name
+            FROM loan_guarantors lg
+            LEFT JOIN members m ON m.member_no = lg.member_no
+            WHERE lg.guarantor_no = :member_no
+        """)
+
+        guarantees = db.session.execute(
+            sql, {"member_no": member_no}
+        ).fetchall()
+
+        total_guaranteed = sum(
+            g.amount_guaranteed for g in guarantees
+        )
+
+    return render_template(
+        'admin/member_guarantees.html',
+        member_no=member_no,
+        guarantees=guarantees,
+        total_guaranteed=total_guaranteed
+    )
+
+
+@admin_bp.route('/loan-guarantors/<loan_no>')
+@login_required
+def loan_guarantors(loan_no):
+
+    sql = text("""
+        SELECT 
+            lg.guarantor_no,
+            m.name,
+            lg.amount_guaranteed
+        FROM loan_guarantors lg
+        LEFT JOIN members m ON m.member_no = lg.guarantor_no
+        WHERE lg.loan_no = :loan_no
+    """)
+
+    guarantors = db.session.execute(
+        sql, {"loan_no": loan_no}
+    ).fetchall()
+
+    return render_template(
+        'admin/loan_guarantors.html',
+        guarantors=guarantors,
+        loan_no=loan_no
+    )
+
+@admin_bp.route('/active-loan-guarantors', methods=['GET', 'POST'])
+@login_required
+def active_loan_guarantors():
+
+    member_no = None
+    loan = None
+    guarantors = []
+    total_guaranteed = 0
+
+    if request.method == 'POST':
+        member_no = request.form.get('member_no').strip()
+
+        # 1️⃣ Get active loan for member
+        loan_sql = text("""
+            SELECT loan_no, loan_amount, balance
+            FROM loans
+            WHERE member_no = :member_no
+              AND balance > 0
+            ORDER BY id DESC
+            LIMIT 1
+        """)
+
+        loan = db.session.execute(
+            loan_sql, {"member_no": member_no}
+        ).fetchone()
+
+        # 2️⃣ If loan exists, get guarantors
+        if loan:
+            guarantor_sql = text("""
+            SELECT 
+                lg.guarantor_no,
+                m.name,
+                m.phone,
+                lg.amount_guaranteed
+            FROM loan_guarantors lg
+            LEFT JOIN members m 
+                   ON m.member_no = lg.guarantor_no
+            WHERE lg.loan_no = :loan_no
+            """)
+
+
+            guarantors = db.session.execute(
+                guarantor_sql, {"loan_no": loan.loan_no}
+            ).fetchall()
+
+            total_guaranteed = sum(
+                g.amount_guaranteed for g in guarantors
+            )
+
+    return render_template(
+        'admin/active_loan_guarantors.html',
+        member_no=member_no,
+        loan=loan,
+        guarantors=guarantors,
+        total_guaranteed=total_guaranteed
     )
