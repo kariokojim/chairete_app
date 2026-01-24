@@ -2,10 +2,9 @@ from flask import Flask, redirect, url_for, flash, request
 from flask_login import current_user, logout_user
 from datetime import datetime, timedelta
 import os
-
 from .config import Config
 from .extensions import db, login_manager, migrate, csrf
-
+from sacco_app.utils.sidebar import SIDEBAR_ITEMS
 
 def create_app():
     app = Flask(__name__)
@@ -97,5 +96,22 @@ def create_app():
     @app.route("/ping")
     def ping():
         return {"status": "ok", "message": "Sacco app running!"}, 200
+
+    # ------------------------------
+    # sidebar menus
+    # ------------------------------
+       
+    @app.context_processor
+    def inject_sidebar():
+        if not current_user.is_authenticated:
+            return dict(sidebar_items=[])
+
+        user_role = current_user.role
+
+        filtered_items = [
+            item for item in SIDEBAR_ITEMS
+            if user_role in item["roles"]
+        ]
+        return dict(sidebar_items=filtered_items)
 
     return app
