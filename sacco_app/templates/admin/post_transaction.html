@@ -1,50 +1,159 @@
 {% extends "base.html" %}
 {% block content %}
 
-<form id="postSavingsForm" method="POST" action="{{ url_for('admin.post_savings_transaction') }}">
-    {{ form.hidden_tag() }}
-    <div class="mb-3">
-        {{ form.member_no.label }}
-        {{ form.member_no(class="form-control", id="member_no") }}
+<div class="container mt-4">
+  <div class="card shadow-sm border-0">
+    <div class="card-header bg-success text-white">
+      <h5 class="mb-0">💰 Post Savings Transaction</h5>
     </div>
-    <div class="mb-3">
-        {{ form.amount.label }}
-        {{ form.amount(class="form-control") }}
-    </div>
-    <div class="mb-3">
-        {{ form.bank_txn_date.label }}
-        {{ form.bank_txn_date(class="form-control", type="date") }}
-    </div>
-    <div class="mb-3">
-        {{ form.narration.label }}
-        {{ form.narration(class="form-control") }}
-    </div>
-    <button type="submit" class="btn btn-success">Post Savings</button>
-</form>
 
+    <div class="card-body">
+
+      <form id="postSavingsForm"
+            method="POST"
+            action="{{ url_for('admin.post_savings_transaction') }}">
+
+        {{ form.hidden_tag() }}
+
+        <!-- MEMBER -->
+        <div class="row mb-3">
+          <div class="col-md-4">
+            {{ form.member_no.label(class="form-label fw-bold") }}
+            {{ form.member_no(class="form-control", id="member_no", autocomplete="off") }}
+          </div>
+
+          <div class="col-md-8">
+            <label class="form-label fw-bold">Member Name</label>
+            <input type="text"
+                   id="member_name"
+                   class="form-control bg-light"
+                   readonly
+                   placeholder="Auto-filled after member number">
+            <small id="member_feedback" class="text-muted"></small>
+          </div>
+        </div>
+
+        <!-- AMOUNT -->
+        <div class="row mb-3">
+          <div class="col-md-4">
+            {{ form.amount.label(class="form-label fw-bold") }}
+            {{ form.amount(class="form-control", step="0.01") }}
+          </div>
+
+          <div class="col-md-4">
+            {{ form.bank_txn_date.label(class="form-label fw-bold") }}
+            {{ form.bank_txn_date(class="form-control", type="date") }}
+          </div>
+        </div>
+
+        <!-- NARRATION -->
+        <div class="mb-3">
+          {{ form.narration.label(class="form-label fw-bold") }}
+          {{ form.narration(class="form-control") }}
+        </div>
+
+        <!-- ACTIONS -->
+        <div class="d-flex justify-content-between mt-4">
+          <a href="{{ request.referrer or url_for('admin.dashboard') }}"
+             class="btn btn-outline-secondary">
+            Cancel
+          </a>
+
+          <button type="submit" class="btn btn-success px-4">
+            ✅ Post Savings
+          </button>
+        </div>
+
+      </form>
+
+    </div>
+  </div>
+  <!-- Confirm Modal -->
+<div class="modal fade" id="confirmModal" tabindex="-1">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header bg-primary text-white">
+        <h5 class="modal-title">Confirm Deposit</h5>
+      </div>
+      <div class="modal-body">
+        <p>
+          You are about to post
+          <strong id="confirmAmount"></strong>
+          to member
+          <strong id="confirmMember"></strong>.
+        </p>
+        <p class="text-danger">Please confirm this action.</p>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">
+          Cancel
+        </button>
+        <button type="button" class="btn btn-success" id="confirmPostBtn">
+          Confirm & Post
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+</div>
 
 <script>
-$(function() {
-    $('#postSavingsForm').on('submit', function(e) {
-        e.preventDefault();
+$(function () {
 
-        $.ajax({
-            url: "{{ url_for('admin.post_savings_transaction') }}",
-            method: "POST",
-            data: $(this).serialize(),
-            success: function(response) {
-                if (response.success) {
-                    alert("✅ Savings posted successfully!\nTxn No: " + response.txn_no);
-                    $('#postSavingsForm')[0].reset();
-                } else {
-                    alert("❌ " + response.error);
-                }
-            },
-            error: function(xhr) {
-                alert("❌ An error occurred: " + xhr.responseText);
-            }
-        });
-    });
+  function lookupMember() {
+    const memberNo = $('#member_no').val().trim();  // ✅ define first
+    console.log("Looking up:", memberNo);           // ✅ now safe
+
+    const nameField = $('#member_name');
+    const feedback = $('#member_feedback');
+
+    if (memberNo.length < 2) return;
+
+    nameField.val('');
+    feedback.text('Looking up member...').removeClass('text-danger');
+
+    $.get(`/admin/members/lookup/${memberNo}`)
+      .done(function (res) {
+        console.log("Lookup response:", res);
+
+        if (res.found) {
+          nameField.val(res.name);
+          feedback.text('');
+        } else {
+          feedback.text('Member not found').addClass('text-danger');
+        }
+      })
+      .fail(function (xhr) {
+        console.error("Lookup failed:", xhr.responseText);
+        feedback.text('Lookup failed').addClass('text-danger');
+      });
+  }
+
+  // 🔑 Trigger lookup
+  $('#member_no').on('keyup change blur', lookupMember);
+
 });
 </script>
+
+<script>
+document.getElementById("postForm").addEventListener("submit", function(e) {
+    e.preventDefault();
+
+    const amount = document.getElementById("amount").value;
+    const member = document.getElementById("member_no").value;
+
+    document.getElementById("confirmAmount").innerText = "KES " + amount;
+    document.getElementById("confirmMember").innerText = member;
+
+    const modal = new bootstrap.Modal(document.getElementById("confirmModal"));
+    modal.show();
+});
+
+document.getElementById("confirmPostBtn").addEventListener("click", function() {
+    document.getElementById("postForm").submit();
+});
+</script>
+
+
 {% endblock %}

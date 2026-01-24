@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="container mt-4">
+  <h4>Member List</h4>
+
+  <div id="members-container">
+    {% include "admin/_member_table.html" %}
+  </div>
+</div>
+
+<script>
+$(function() {
+  // Delegate click events for pagination links
+  $(document).on('click', '.page-nav', function(e) {
+    e.preventDefault();
+    const url = $(this).attr('href');
+    $.ajax({
+      url: url,
+      headers: {'X-Requested-With': 'XMLHttpRequest'},
+      success: function(data) {
+        $('#members-container').html(data);
+      },
+      error: function() {
+        alert('Error loading members.');
+      }
+    });
+  });
+});
+</script>
+{% endblock %}
