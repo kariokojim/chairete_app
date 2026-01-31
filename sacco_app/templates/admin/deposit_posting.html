@@ -1,0 +1,175 @@
+{% extends "base.html" %}
+{% block title %}Deposit Posting{% endblock %}
+{% block content %}
+<div class="container mt-4">
+  <div class="card shadow-lg border-0 rounded-3">
+    <div class="card-header bg-success text-white">
+      <h5 class="mb-0"> POST MEMBER'S TRANSACTIONS</h5>
+    </div>
+    <div class="card-body">
+      <form id="repayForm" method="POST" action="{{ url_for('admin.deposit_posting') }}">
+        {{ form.hidden_tag() }}
+
+        <div class="row mb-3">
+          <div class="col-md-4">
+            {{ form.member_no.label(class="form-label") }}
+            {{ form.member_no(class="form-control", id="member_no", placeholder="Enter Member No") }}
+            <small id="member_info" class="text-muted d-block mt-2"></small>
+          </div>
+          <div class="col-md-4">
+            {{ form.amount.label(class="form-label") }}
+            {{ form.amount(class="form-control", id="amount", placeholder="Enter  Amount") }}
+          </div>
+          <div class="col-md-4">
+            {{ form.bank_txn_date.label(class="form-label") }}
+            {{ form.bank_txn_date(class="form-control", id="bank_txn_date") }}
+          </div>
+        </div>
+
+        <div class="mb-3">
+          {{ form.narration.label(class="form-label") }}
+          {{ form.narration(class="form-control", id="narration", placeholder="Enter Narration ") }}
+        </div>
+
+        <div class="text-end">
+          <button type="button" id="openConfirm" class="btn btn-success px-4">Review & Confirm</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<!-- Confirmation Modal -->
+<div class="modal fade" id="confirmModal" tabindex="-1" aria-labelledby="confirmModalLabel" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content rounded-3">
+      <div class="modal-header">
+        <h5 class="modal-title" id="confirmModalLabel">Confirm Postings</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <dl class="row mb-0">
+          <dt class="col-5">Member</dt>
+          <dd class="col-7" id="c_member_name">—</dd>
+
+          <dt class="col-5">Member No</dt>
+          <dd class="col-7" id="c_member_no">—</dd>
+
+          <dt class="col-5">Loan No</dt>
+          <dd class="col-7" id="c_loan_no">—</dd>
+
+          <dt class="col-5">Outstanding Balance</dt>
+          <dd class="col-7" id="c_balance">—</dd>
+
+          <dt class="col-5">Due Amount</dt>
+          <dd class="col-7" id="c_due">—</dd>
+
+          <dt class="col-5">Savings Balance</dt>
+          <dd class="col-7" id="c_savings">—</dd>
+
+          <dt class="col-5">Posting Amount</dt>
+          <dd class="col-7" id="c_amount">—</dd>
+
+          <dt class="col-5">Txn Date</dt>
+          <dd class="col-7" id="c_date">—</dd>
+
+          <dt class="col-5">Narration</dt>
+          <dd class="col-7" id="c_narration">—</dd>
+        </dl>
+
+        <hr class="my-2">
+        <p class="small text-muted mb-0">
+          This Posting will be applied in order:
+          <strong>Interest → Principal → Savings</strong>.<br>
+           transaction date will be affected Imadiately.
+        </p>
+      </div>
+      <div class="modal-footer">
+        <button type="button" id="confirmSubmit" class="btn btn-primary">Confirm & Post payment</button>
+        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+document.addEventListener("DOMContentLoaded", () => {
+  const memberInput = document.getElementById("member_no");
+  const infoDisplay = document.getElementById("member_info");
+  const openBtn = document.getElementById("openConfirm");
+  const form = document.getElementById("repayForm");
+  let cachedLookup = null;
+
+  const fmt = (n) => (isNaN(Number(n)) ? n : Number(n).toLocaleString());
+
+  async function fetchMemberLoan(memberNo) {
+    if (!memberNo) return null;
+    infoDisplay.innerHTML = "⏳ Loading member info...";
+    try {
+      const resp = await fetch(`/admin/api/member_loan_info/${memberNo}`);
+      const data = await resp.json();
+      if (!resp.ok || data.error) {
+        infoDisplay.innerHTML = `<span class="text-danger">❌ Member not found or no active loan.</span>`;
+        return null;
+      }
+
+      infoDisplay.innerHTML = `
+        <div class="small">
+          <strong>${data.member_name}</strong><br>
+          Loan No: <strong>${data.loan_no || '—'}</strong><br>
+          Outstanding Loan: <strong>${fmt(data.loan_balance)}</strong><br>
+          Due Amount: <strong class="text-danger">${fmt(data.due_amount)}</strong><br>
+          Savings Balance: <strong class="text-success">${fmt(data.savings_balance)}</strong>
+        </div>
+      `;
+      return data;
+    } catch (err) {
+      console.error(err);
+      infoDisplay.innerHTML = `<span class="text-danger">⚠️ Error loading member info.</span>`;
+      return null;
+    }
+  }
+
+  memberInput.addEventListener("blur", async () => {
+    cachedLookup = await fetchMemberLoan(memberInput.value.trim());
+  });
+
+  openBtn.addEventListener("click", async () => {
+    const memberNo = memberInput.value.trim();
+    const amount = document.getElementById("amount").value;
+    const date = document.getElementById("bank_txn_date").value;
+    const narration = document.getElementById("narration").value;
+
+    if (!memberNo) return alert("Enter Member No");
+    if (!amount || Number(amount) <= 0) return alert("Enter a valid amount");
+    if (!date) return alert("Enter transaction date");
+
+    if (!cachedLookup || cachedLookup.member_no !== memberNo) {
+      cachedLookup = await fetchMemberLoan(memberNo);
+    }
+    if (!cachedLookup) return alert("Member not found or no active loan.");
+
+    // Fill modal
+    document.getElementById("c_member_name").textContent = cachedLookup.member_name;
+    document.getElementById("c_member_no").textContent = cachedLookup.member_no;
+    document.getElementById("c_loan_no").textContent = cachedLookup.loan_no || '—';
+    document.getElementById("c_balance").textContent = fmt(cachedLookup.loan_balance);
+    document.getElementById("c_due").textContent = fmt(cachedLookup.due_amount);
+    document.getElementById("c_savings").textContent = fmt(cachedLookup.savings_balance);
+    document.getElementById("c_amount").textContent = fmt(amount);
+    document.getElementById("c_date").textContent = date;
+    document.getElementById("c_narration").textContent = narration || '—';
+
+    const modal = new bootstrap.Modal(document.getElementById('confirmModal'));
+    modal.show();
+
+    const confirmBtn = document.getElementById("confirmSubmit");
+    const handler = () => {
+      confirmBtn.removeEventListener("click", handler);
+      form.submit();
+    };
+    confirmBtn.addEventListener("click", handler);
+  });
+});
+</script>
+{% endblock %}

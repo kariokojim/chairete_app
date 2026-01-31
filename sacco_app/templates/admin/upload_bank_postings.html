@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div class="container mt-5">
+    <div class="card shadow-lg border-0 rounded-4">
+        <div class="card-header bg-primary text-white text-center rounded-top-4">
+            <h4 class="mb-0 fw-bold">📤 Upload Bank Postings</h4>
+        </div>
+        <div class="card-body p-4">
+            <p class="text-muted mb-4">
+                Upload an Excel file (.xlsx) containing <strong>Bank posting records</strong> for members.<br>
+                Each record should include:
+            </p>
+            <ul class="text-muted">
+                <li><code>member_no</code> – Member number (e.g. M0012)</li>
+                <li><code>bank_txn_date</code> – Date of transaction (e.g. 2025-10-20)</li>
+                <li><code>credit_amount</code> – Amount received</li>
+                <li><code>narration</code> – Description or notes</li>
+            </ul>
+            <hr>
+
+            <form method="POST" enctype="multipart/form-data">
+                {{ form.hidden_tag() }}
+
+                <div class="mb-4">
+                    <label class="form-label fw-bold text-primary">Select Excel File</label>
+                    {{ form.file(class="form-control form-control-lg border-primary") }}
+                </div>
+
+                <div class="d-grid gap-2">
+                    <button type="submit" class="btn btn-success btn-lg rounded-3 shadow-sm">
+                        <i class="bi bi-upload"></i> Upload Bank Postings
+                    </button>
+                    <a href="{{ url_for('admin.dashboard') }}" class="btn btn-outline-secondary btn-lg rounded-3">
+                        <i class="bi bi-arrow-left"></i> Back to Dashboard
+                    </a>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<style>
+    .container {
+        max-width: 700px;
+    }
+    .card {
+        background: #fdfdfd;
+        border-radius: 15px;
+    }
+    .card-header {
+        background: linear-gradient(90deg, #007bff 0%, #0056b3 100%);
+    }
+    .form-control-lg {
+        font-size: 1.1rem;
+        padding: 0.75rem;
+    }
+</style>
+
+{% endblock %}
