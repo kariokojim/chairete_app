@@ -1568,7 +1568,7 @@ def dashboard():
     # ----------------------------
     # 1. TOTAL MEMBERS
     # ----------------------------
-    total_members = Member.query.count()
+    total_members = Member.query.filter(Member.member_no != 'M000GL').count()
 
     # ----------------------------
     # 2. TOTAL SAVINGS
