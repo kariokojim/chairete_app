@@ -35,7 +35,7 @@ def post_savings(member_no, amount, user, narration, bank_txn_date):
 
     # 1️⃣ Post member savings record
     txn = Transaction(
-        txn_no = txn_no,
+        txn_no = f"TXN{uuid.uuid4().hex[:10].upper()}",
         member_no=member_no,
         tran_type='CREDIT',
         amount=amount,
@@ -324,7 +324,7 @@ def process_loan_repayment(member_no, amount, narration, bank_txn_date, posted_b
                 debit_amount=Decimal('0.00'),
                 credit_amount=remaining,
                 reference=txn_ref,
-                narration=f"Savings deposit {member_no}",
+                narration=f"{narration} {member_no}",
                 bank_txn_date=txn_date,
                 posted_by=posted_by,
                 running_balance=member_savings_acc.balance
@@ -338,7 +338,7 @@ def process_loan_repayment(member_no, amount, narration, bank_txn_date, posted_b
                 debit_amount=Decimal('0.00'),
                 credit_amount=remaining,
                 reference=txn_ref,
-                narration=f"Savings control {member_no}",
+                narration=f"{narration} {member_no}",
                 bank_txn_date=txn_date,
                 posted_by=posted_by,
                 running_balance=gl_savings_control.balance
