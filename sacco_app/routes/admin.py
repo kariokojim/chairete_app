@@ -1056,9 +1056,9 @@ def api_member_loan_info(member_no):
     #loan repayment
 
 #loan_ repayment master
-@admin_bp.route('/loan-repayment', methods=['GET', 'POST'])
+@admin_bp.route('/deposit-posting', methods=['GET', 'POST'])
 @login_required
-def loan_repayment():
+def deposit_posting():
     form = LoanRepaymentForm()
     if form.validate_on_submit():
         member_no = form.member_no.data.strip()
@@ -1071,12 +1071,12 @@ def loan_repayment():
         try:
             process_loan_repayment(member_no, amount, narration, bank_txn_date, current_user.username)
             flash(f"Member posting of {amount} for {member_no} posted successfully.", "success")
-            return redirect(url_for('admin.loan_repayment'))
+            return redirect(url_for('admin.deposit_posting'))
         except Exception as e:
             db.session.rollback()
             flash(f"Error posting : {str(e)}", "danger")
 
-    return render_template('admin/loan_repayment.html', form=form)
+    return render_template('admin/deposit_posting.html', form=form)
 #LOAN PREPAYMENT
 @admin_bp.route('/loan-prepayment', methods=['GET', 'POST'])
 @login_required
@@ -1109,9 +1109,9 @@ def loan_prepayment():
 # ===========================================
 # UPLOAD LOAN REPAYMENTS FROM EXCEL
 # ===========================================
-@admin_bp.route('/upload_loan_repayments', methods=['GET', 'POST'])
+@admin_bp.route('/upload_bank_postings', methods=['GET', 'POST'])
 @login_required
-def upload_loan_repayments():
+def upload_bank_postings():
     """
     FINAL SACCO LOGIC:
     - No Cash account
@@ -1196,12 +1196,12 @@ def upload_loan_repayments():
             df = pd.read_excel(file)
         except:
             flash("Invalid Excel file.", "danger")
-            return redirect(url_for('admin.upload_loan_repayments'))
+            return redirect(url_for('admin.upload_bank_postings'))
 
         required = {"member_no", "credit_amount", "narration", "bank_txn_date"}
         if not required.issubset(df.columns):
             flash("Missing required columns.", "danger")
-            return redirect(url_for('admin.upload_loan_repayments'))
+            return redirect(url_for('admin.upload_bank_postings'))
 
         # GLs (confirmed)
         gl_savings = SaccoAccount.query.filter_by(account_number="M000GL_SAVINGS").first()
@@ -1514,7 +1514,7 @@ def upload_loan_repayments():
             success_count=success
         )
 
-    return render_template("admin/upload_loan_repayments.html", form=form)
+    return render_template("admin/upload_bank_postings.html", form=form)
 ##PAR dashboard
 def get_par_metrics():
     sql = """
@@ -1569,7 +1569,6 @@ def dashboard():
     # 1. TOTAL MEMBERS
     # ----------------------------
     total_members = Member.query.filter(Member.member_no != 'M000GL').count()
-
     # ----------------------------
     # 2. TOTAL SAVINGS
     # ----------------------------
@@ -4441,4 +4440,305 @@ def active_loan_guarantors():
         loan=loan,
         guarantors=guarantors,
         total_guaranteed=total_guaranteed
+    )
+    
+##loan statement
+from flask import render_template, request, flash
+from flask_login import login_required
+from sqlalchemy import text
+from sacco_app.models import Member
+from sacco_app.extensions import db
+
+
+@admin_bp.route('/loan-statement_new', methods=['GET', 'POST'])
+@login_required
+def loan_statement_new():
+    member = None
+    loan = None
+    schedules = []
+    totals = {
+        "principal_due": 0,
+        "interest_due": 0,
+        "principal_paid": 0,
+        "interest_paid": 0
+    }
+    arrears_principal = 0
+    arrears_interest = 0
+
+    if request.method == 'POST':
+        member_no = request.form.get('member_no')
+
+        # 1️⃣ Get MEMBER (MODEL – important for base.html)
+        member = Member.query.filter_by(member_no=member_no).first()
+
+        if not member:
+            flash("Member not found", "danger")
+            return render_template("admin/loan_statement_form_new.html")
+
+        # 2️⃣ Get ACTIVE LOAN
+        loan = db.session.execute(text("""
+            SELECT *
+            FROM loans
+            WHERE member_no = :member_no
+              AND status = 'Active'
+            ORDER BY created_at DESC
+            LIMIT 1
+        """), {"member_no": member_no}).fetchone()
+
+        if not loan:
+            flash("This member has no active loan", "warning")
+            return render_template(
+                "admin/loan_statement_form_new.html",
+                member=member
+            )
+
+        # 3️⃣ Get LOAN SCHEDULE
+        schedules = db.session.execute(text("""
+            SELECT
+                installment_no,
+                due_date,
+                principal_due,
+                interest_due,
+                principal_paid,
+                interest_paid,
+                principal_balance,
+                status
+            FROM loan_schedules
+            WHERE loan_no = :loan_no
+            ORDER BY installment_no ASC
+        """), {"loan_no": loan.loan_no}).fetchall()
+
+        # 4️⃣ Totals & arrears calculation
+        for s in schedules:
+            totals["principal_due"] += s.principal_due or 0
+            totals["interest_due"] += s.interest_due or 0
+            totals["principal_paid"] += s.principal_paid or 0
+            totals["interest_paid"] += s.interest_paid or 0
+
+            arrears_principal += max(0, (s.principal_due or 0) - (s.principal_paid or 0))
+            arrears_interest += max(0, (s.interest_due or 0) - (s.interest_paid or 0))
+
+    return render_template(
+        "admin/loan_statement_form_new.html",
+        member=member,
+        loan=loan,
+        schedules=schedules,
+        totals=totals,
+        arrears_principal=arrears_principal,
+        arrears_interest=arrears_interest
+    )
+
+@admin_bp.route('/loan-statement-pdf-new', methods=['GET', 'POST'])
+@login_required
+def loan_statement_pdf_new():
+    """
+    Generates a professional SACCO loan statement PDF
+    using loans + loan_schedules tables.
+    """
+
+    from flask import current_app, send_file, request, flash, redirect, url_for
+    from sacco_app.models import Member
+    from sacco_app.extensions import db
+    from sqlalchemy import text
+    from decimal import Decimal
+    from io import BytesIO
+    from datetime import datetime, date
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib import colors
+    from reportlab.lib.units import cm
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.platypus import (
+        SimpleDocTemplate, Paragraph, Table, TableStyle, Spacer, Image
+    )
+    from reportlab.lib.enums import TA_LEFT, TA_CENTER
+
+    # ---------------- Parameters ----------------
+    member_no = (request.values.get('member_no') or '').strip()
+    today = date.today()
+
+    if not member_no:
+        flash("Member number is required.", "warning")
+        return redirect(url_for('admin.loan_statement_new'))
+
+    # ---------------- Member ----------------
+    member = Member.query.filter_by(member_no=member_no).first()
+    if not member:
+        flash("Member not found.", "danger")
+        return redirect(url_for('admin.loan_statement_new'))
+
+    # ---------------- Loan ----------------
+    loan = db.session.execute(text("""
+        SELECT *
+        FROM loans
+        WHERE member_no = :member_no
+          AND status = 'Active'
+        ORDER BY created_at DESC
+        LIMIT 1
+    """), {"member_no": member_no}).fetchone()
+
+    if not loan:
+        flash("No active loan found for this member.", "warning")
+        return redirect(url_for('admin.loan_statement_new'))
+
+    # ---------------- Loan Schedules ----------------
+    schedules = db.session.execute(text("""
+        SELECT
+            installment_no,
+            due_date,
+            principal_due,
+            interest_due,
+            principal_paid,
+            interest_paid,
+            principal_balance,
+            status
+        FROM loan_schedules
+        WHERE loan_no = :loan_no
+        ORDER BY installment_no ASC
+    """), {"loan_no": loan.loan_no}).fetchall()
+
+    # ---------------- Totals ----------------
+    principal_amount = Decimal(loan.loan_amount or 0)
+    total_principal_paid = sum(Decimal(s.principal_paid or 0) for s in schedules)
+    total_interest_paid = sum(Decimal(s.interest_paid or 0) for s in schedules)
+    outstanding_balance = Decimal(loan.balance or 0)
+
+    # ---------------- PDF Setup ----------------
+    buffer = BytesIO()
+    filename = f"LOAN_{loan.loan_no}.pdf"
+
+    doc = SimpleDocTemplate(
+        buffer,
+        pagesize=A4,
+        leftMargin=1.5 * cm,
+        rightMargin=1.5 * cm,
+        topMargin=2 * cm,
+        bottomMargin=2 * cm
+    )
+
+    styles = getSampleStyleSheet()
+    header_style = ParagraphStyle(
+        "header", fontSize=14, leading=18,
+        alignment=TA_LEFT, textColor=colors.HexColor("#002060")
+    )
+    sub_style = ParagraphStyle(
+        "sub", fontSize=10, textColor=colors.gray, spaceAfter=4
+    )
+
+    story = []
+
+    # ---------------- Header ----------------
+    logo_path = current_app.root_path + "/static/img/logo.png"
+    try:
+        logo = Image(logo_path, width=3 * cm, height=3 * cm)
+    except Exception:
+        logo = Paragraph("<b>SACCO LOGO</b>", styles["Normal"])
+
+    header_info = [
+        [Paragraph("<b><u>PCEA CHAIRETE SACCO LTD</u></b>",
+                   ParagraphStyle("sacco", fontSize=14, textColor=colors.HexColor("#002060")))],
+        [Paragraph(f"<b>Member:</b> {member.name} ({member.member_no})", sub_style)],
+        [Paragraph(f"<b>Loan No:</b> {loan.loan_no}", sub_style)],
+        [Paragraph(
+            f"<b>Disbursed:</b> {loan.disbursed_date.strftime('%Y-%m-%d')} | "
+            f"<b>Type:</b> {loan.loan_type}",
+            sub_style
+        )],
+    ]
+
+    header_table = Table(
+        [[logo, Table(header_info, colWidths=[11 * cm])]],
+        colWidths=[3 * cm, 12 * cm]
+    )
+    header_table.setStyle(TableStyle([
+        ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+        ('LEFTPADDING', (0, 0), (-1, -1), 0),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 0),
+    ]))
+
+    story.append(header_table)
+    story.append(Spacer(1, 10))
+
+    # ---------------- Title ----------------
+    story.append(Paragraph("<b>Loan Statement</b>", ParagraphStyle(
+        "title", fontSize=12, alignment=TA_CENTER, textColor=colors.HexColor("#002060")
+    )))
+    story.append(Spacer(1, 12))
+
+    # ---------------- Summary ----------------
+    summary_data = [
+        ["Principal Amount", f"KSh {principal_amount:,.2f}"],
+        ["Total Principal Paid", f"KSh {total_principal_paid:,.2f}"],
+        ["Total Interest Paid", f"KSh {total_interest_paid:,.2f}"],
+        ["Total Paid (Principal + Interest)", f"KSh {(total_principal_paid + total_interest_paid):,.2f}"],
+        ["Outstanding Balance", f"KSh {outstanding_balance:,.2f}"],
+    ]
+
+    summary_table = Table(summary_data, colWidths=[8 * cm, 6 * cm])
+    summary_table.setStyle(TableStyle([
+        ('GRID', (0, 0), (-1, -1), 0.25, colors.grey),
+        ('ALIGN', (1, 0), (-1, -1), 'RIGHT'),
+        ('BACKGROUND', (0, 0), (-1, 0), colors.whitesmoke),
+    ]))
+    story.append(summary_table)
+    story.append(Spacer(1, 12))
+
+    # ---------------- Schedule Table ----------------
+    data = [[
+        "No", "Due Date",
+        "Principal Due", "Interest Due",
+        "Principal Paid", "Interest Paid",
+        "Balance", "Status"
+    ]]
+
+    if not schedules:
+        data.append(["", "No installments found", "", "", "", "", "", ""])
+    else:
+        for s in schedules:
+            data.append([
+                s.installment_no,
+                s.due_date.strftime("%Y-%m-%d"),
+                f"{Decimal(s.principal_due or 0):,.2f}",
+                f"{Decimal(s.interest_due or 0):,.2f}",
+                f"{Decimal(s.principal_paid or 0):,.2f}",
+                f"{Decimal(s.interest_paid or 0):,.2f}",
+                f"{Decimal(s.principal_balance or 0):,.2f}",
+                s.status
+            ])
+
+    schedule_table = Table(
+        data,
+        colWidths=[1.2*cm, 2.5*cm, 2.6*cm, 2.6*cm, 2.6*cm, 2.6*cm, 2.8*cm, 2.0*cm],
+        repeatRows=1
+    )
+    schedule_table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.lightgrey),
+        ('FONT', (0, 0), (-1, 0), 'Helvetica-Bold', 9),
+        ('FONT', (0, 1), (-1, -1), 'Helvetica', 9),
+        ('GRID', (0, 0), (-1, -1), 0.25, colors.grey),
+        ('ALIGN', (2, 1), (-2, -1), 'RIGHT'),
+        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.whitesmoke, colors.white]),
+    ]))
+
+    story.append(schedule_table)
+    story.append(Spacer(1, 20))
+
+    # ---------------- Footer ----------------
+    def add_footer(canvas, doc):
+        canvas.saveState()
+        canvas.setFont("Helvetica", 8)
+        canvas.setFillColor(colors.grey)
+        canvas.drawRightString(
+            A4[0] - 1.5 * cm, 1.2 * cm,
+            f"Generated on {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | Page {canvas.getPageNumber()}"
+        )
+        canvas.restoreState()
+
+    doc.build(story, onFirstPage=add_footer, onLaterPages=add_footer)
+
+    buffer.seek(0)
+    return send_file(
+        buffer,
+        as_attachment=True,
+        download_name=filename,
+        mimetype="application/pdf"
     )
