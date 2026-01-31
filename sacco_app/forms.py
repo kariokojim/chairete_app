@@ -101,5 +101,5 @@ class LoanRepaymentForm(FlaskForm):
     member_no = StringField('Member Number', validators=[DataRequired(), Length(max=20)])
     amount = DecimalField('Amount', validators=[DataRequired()], places=2)
     bank_txn_date = DateField('Transaction Date', format='%Y-%m-%d', validators=[DataRequired()])
-    narration = TextAreaField('Narration', default='Loan Repayment')
-    submit = SubmitField('Post Repayment')
+    narration = TextAreaField('Narration', default='Member deposit')
+    submit = SubmitField('Post Payment')
