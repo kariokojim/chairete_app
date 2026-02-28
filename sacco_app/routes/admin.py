@@ -19,12 +19,13 @@ import random, uuid
 import pandas as pd
 from werkzeug.utils import secure_filename
 import os
+from flask_mail import Message
 from datetime import datetime
 from flask import current_app
 from sqlalchemy import text   
 from sacco_app.models import NextOfKin, Beneficiary
 from sacco_app.utils.receipt_utils import generate_receipt_no
-
+from sacco_app.utils.loan_email_utils import send_loan_schedule_email
 from sacco_app.utils.async_tasks import run_async
 from sacco_app.utils.receipt_tasks import send_receipt_background
 
@@ -426,96 +427,152 @@ def api_member_info(member_no):
 
     
     #LOAN DISBURSMENT
+def generate_schedule_pdf(loan, schedules, member):
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=A4)
+    styles = getSampleStyleSheet()
+    elements = []
+
+    elements.append(Paragraph("<b>Loan Repayment Schedule</b>", styles['Title']))
+    elements.append(Spacer(1, 12))
+
+    elements.append(Paragraph(f"Member: {member.name}", styles['Normal']))
+    elements.append(Paragraph(f"Loan No: {loan.loan_no}", styles['Normal']))
+    elements.append(Paragraph(f"Loan Amount: {loan.loan_amount:,.2f}", styles['Normal']))
+    elements.append(Spacer(1, 12))
+
+    data = [["Inst#", "Due Date", "Principal", "Interest", "Premium", "Total", "Balance"]]
+
+    for s in schedules:
+        premium = getattr(s, "premium_due", Decimal("0.00"))
+        total_due = (s.principal_due + s.interest_due + premium).quantize(Decimal("0.01"))
+
+        data.append([
+            s.installment_no,
+            s.due_date.strftime("%d-%b-%Y"),
+            f"{s.principal_due:,.2f}",
+            f"{s.interest_due:,.2f}",
+            f"{premium:,.2f}",
+            f"{total_due:,.2f}",
+            f"{s.principal_balance:,.2f}",
+        ])
+
+    table = Table(data)
+    table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), colors.lightgrey),
+        ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
+        ("FONT", (0, 0), (-1, 0), "Helvetica-Bold"),
+        ("ALIGN", (2, 1), (-1, -1), "RIGHT"),
+    ]))
+
+    elements.append(table)
+    doc.build(elements)
+
+    buffer.seek(0)
+    return buffer
+
+
+"""Loan disbursement route – creates loan, GL entries, guarantors, and schedules."""
+from flask import render_template, request, flash, redirect, url_for, send_file, current_app
+from flask_login import login_required, current_user
+from decimal import Decimal
+from datetime import datetime
+from dateutil.relativedelta import relativedelta
+import uuid, re
+from io import BytesIO
+
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+from reportlab.lib.pagesizes import A4
+from reportlab.lib import colors
+from reportlab.lib.styles import getSampleStyleSheet
+
+from sacco_app.models import (
+    Member, Loan, LoanGuarantor, LoanSchedule,
+    SaccoAccount, Transaction
+)
+
 @admin_bp.route('/loans/disburse', methods=['GET', 'POST'])
 @login_required
 def disburse_loan():
-    """Loan disbursement route – creates loan, GL entries, guarantors, and schedules."""
-    from decimal import Decimal
-    from dateutil.relativedelta import relativedelta
-    from datetime import datetime,time
-    import uuid, re
-
-    from sacco_app import db
-    from sacco_app.models import (
-        Member, Loan, LoanGuarantor, LoanSchedule,
-        SaccoAccount, Transaction
-    )
 
     form = LoanDisbursementForm()
 
-    # --- helper to parse guarantors from dynamic form fields
+    # ---------------- GUARANTOR PARSER ----------------
     def parse_guarantors(formdata):
         idxs = set()
         pattern = re.compile(r"^guarantors\[(\d+)\]\[(member_no|amount_guaranteed)\]$")
+
         for k in formdata.keys():
             m = pattern.match(k)
             if m:
                 idxs.add(int(m.group(1)))
+
         parsed = []
         for i in sorted(list(idxs)):
             gno = (formdata.get(f"guarantors[{i}][member_no]") or "").strip()
             gamt = formdata.get(f"guarantors[{i}][amount_guaranteed]") or "0"
+
             if gno:
                 try:
-                    parsed.append({"member_no": gno, "amount_guaranteed": Decimal(str(gamt))})
-                except Exception:
-                    parsed.append({"member_no": gno, "amount_guaranteed": Decimal("0")})
+                    parsed.append({
+                        "member_no": gno,
+                        "amount_guaranteed": Decimal(str(gamt))
+                    })
+                except:
+                    parsed.append({
+                        "member_no": gno,
+                        "amount_guaranteed": Decimal("0.00")
+                    })
+
         return parsed
 
-    # --- show validation errors clearly
+    # ---------------- FORM VALIDATION ----------------
     if request.method == 'POST' and not form.validate_on_submit():
-        def flatten_errors(errors):
-            msg_list = []
-            for field, msgs in errors.items():
-                if isinstance(msgs, (list, tuple)):
-                    for m in msgs:
-                        if isinstance(m, dict):
-                            for subfield, submsg in m.items():
-                                msg_list.append(f"{field}.{subfield}: {', '.join(submsg) if isinstance(submsg, list) else submsg}")
-                        else:
-                            msg_list.append(f"{field}: {m}")
-                else:
-                    msg_list.append(f"{field}: {msgs}")
-            return "; ".join(msg_list)
-
-        errs = flatten_errors(form.errors)
-        flash(f"Form did not validate: {errs or 'Check required fields'}", "warning")
+        flash(f"Form validation failed: {form.errors}", "warning")
         return render_template('admin/disburse_loan.html', form=form)
 
-    # --- MAIN logic
     if form.validate_on_submit():
         try:
-            # --- Input values
+            # ---------------- INPUTS ----------------
             member_no = form.member_no.data.strip()
             loan_amount = Decimal(str(form.loan_amount.data)).quantize(Decimal('0.01'))
             loan_period = int(form.loan_period.data)
             loan_type = (getattr(form, 'loan_type', None).data or 'normal').lower().strip()
             guarantors = parse_guarantors(request.form)
 
-            # --- Loan constants
+            # ---------------- CONSTANTS ----------------
             PROCESSING_FEE_RATE = Decimal('0.005')   # 0.5%
-            ANNUAL_RATE = Decimal('15.0')            # % per year
+            INSURANCE_RATE = Decimal('0.015')        # 1.5%
+            ANNUAL_RATE = Decimal('15.0')
+
             monthly_rate = (ANNUAL_RATE / Decimal('100')) / Decimal('12')
 
             processing_fee = (loan_amount * PROCESSING_FEE_RATE).quantize(Decimal('0.01'))
+            insurance_total = (loan_amount * INSURANCE_RATE).quantize(Decimal('0.01'))
+            monthly_premium = (insurance_total / loan_period).quantize(Decimal('0.01'))
+
             net_disbursed = (loan_amount - processing_fee).quantize(Decimal('0.01'))
 
-            # --- Member check
+            # ---------------- MEMBER VALIDATION ----------------
             member = Member.query.filter_by(member_no=member_no).first()
             if not member:
-                flash(f"Member {member_no} not found.", "danger")
+                flash("Member not found.", "danger")
                 return render_template('admin/disburse_loan.html', form=form)
 
-            savings_acc = SaccoAccount.query.filter_by(member_no=member_no, account_type='SAVINGS').first()
+            savings_acc = SaccoAccount.query.filter_by(
+                member_no=member_no,
+                account_type='SAVINGS'
+            ).first()
+
             if not savings_acc or savings_acc.balance <= 0:
-                flash("Member has no savings or balance is zero.", "danger")
+                flash("Member has insufficient savings.", "danger")
                 return render_template('admin/disburse_loan.html', form=form)
 
             if loan_amount > (savings_acc.balance * 3):
-                flash("Loan amount exceeds 3× member savings.", "danger")
+                flash("Loan exceeds 3× savings.", "danger")
                 return render_template('admin/disburse_loan.html', form=form)
 
-            # --- Active/top-up logic
+            # ---------------- ACTIVE LOAN CHECK ----------------
             active_loan = Loan.query.filter(
                 Loan.member_no == member_no,
                 Loan.status.in_(["Active", "Disbursed"]),
@@ -523,61 +580,55 @@ def disburse_loan():
             ).first()
 
             if loan_type != 'topup' and active_loan:
-                flash("Member already has an active loan. Only a top-up is allowed.", "danger")
+                flash("Member already has an active loan.", "danger")
                 return render_template('admin/disburse_loan.html', form=form)
+
             if loan_type == 'topup' and not active_loan:
                 flash("No active loan to top-up.", "danger")
                 return render_template('admin/disburse_loan.html', form=form)
 
-            # --- Required GLs
+            # ---------------- GL ACCOUNTS ----------------
             gl_cash = SaccoAccount.query.filter_by(account_number='M000GL_CASH').first()
             gl_loan_control = SaccoAccount.query.filter_by(account_number='M000GL_LOAN').first()
             gl_fee_income = SaccoAccount.query.filter_by(account_number='M000GL_REG_FEE').first()
+
             if not all([gl_cash, gl_loan_control, gl_fee_income]):
-                flash("Missing GL accounts (Cash / Loan Control / Fee Income).", "danger")
+                flash("Missing GL accounts.", "danger")
                 return render_template('admin/disburse_loan.html', form=form)
 
-            # --- Ensure member loan & interest accounts exist
+            # ---------------- MEMBER LOAN ACCOUNTS ----------------
             loan_acct_no = f"{member_no}_LOAN"
             int_acct_no = f"{member_no}_INTEREST"
 
             loan_acct = SaccoAccount.query.filter_by(account_number=loan_acct_no).first()
             if not loan_acct:
-                loan_acct = SaccoAccount(member_no=member_no, account_number=loan_acct_no,
-                                         account_type='LOAN', created_by=current_user.username,
-                                         balance=Decimal('0.00'))
+                loan_acct = SaccoAccount(
+                    member_no=member_no,
+                    account_number=loan_acct_no,
+                    account_type='LOAN',
+                    created_by=current_user.username,
+                    balance=Decimal('0.00')
+                )
                 db.session.add(loan_acct)
 
             int_acct = SaccoAccount.query.filter_by(account_number=int_acct_no).first()
             if not int_acct:
-                int_acct = SaccoAccount(member_no=member_no, account_number=int_acct_no,
-                                        account_type='INTEREST', created_by=current_user.username,
-                                        balance=Decimal('0.00'))
+                int_acct = SaccoAccount(
+                    member_no=member_no,
+                    account_number=int_acct_no,
+                    account_type='INTEREST',
+                    created_by=current_user.username,
+                    balance=Decimal('0.00')
+                )
                 db.session.add(int_acct)
+
             db.session.flush()
 
-            # --- Validate guarantors
-            total_guaranteed = Decimal('0.00')
-            for g in guarantors:
-                g_member_no = g["member_no"]
-                g_amount = g["amount_guaranteed"]
-                g_sav = SaccoAccount.query.filter_by(member_no=g_member_no, account_type='SAVINGS').first()
-                if not g_sav:
-                    flash(f"Guarantor {g_member_no} has no savings account.", "danger")
-                    return render_template('admin/disburse_loan.html', form=form)
-                if g_amount > g_sav.balance:
-                    flash(f"Guarantor {g_member_no} cannot guarantee more than their savings.", "danger")
-                    return render_template('admin/disburse_loan.html', form=form)
-                total_guaranteed += g_amount
-            if guarantors and total_guaranteed < loan_amount:
-                flash("Total guaranteed amount is less than loan amount.", "danger")
-                return render_template('admin/disburse_loan.html', form=form)
-
-            # --- Loan number
+            # ---------------- LOAN NUMBER ----------------
             last_loan = Loan.query.order_by(Loan.id.desc()).first()
             loan_no = f"LN{(last_loan.id + 1) if last_loan else 1:04d}"
 
-            # --- Create Loan record
+            # ---------------- CREATE LOAN ----------------
             new_loan = Loan(
                 loan_no=loan_no,
                 member_no=member_no,
@@ -596,7 +647,7 @@ def disburse_loan():
             db.session.add(new_loan)
             db.session.flush()
 
-            # --- Save guarantors
+            # ---------------- SAVE GUARANTORS ----------------
             for g in guarantors:
                 db.session.add(LoanGuarantor(
                     loan_no=loan_no,
@@ -605,63 +656,24 @@ def disburse_loan():
                     amount_guaranteed=g["amount_guaranteed"]
                 ))
 
-            # --- GL Postings
+            # ---------------- GL POSTINGS ----------------
             txn_ref = f"TXN{uuid.uuid4().hex[:10].upper()}"
-            transactions = []
 
-            # 1️⃣ Dr Member Loan
             loan_acct.balance += loan_amount
-            transactions.append(Transaction(
-                txn_no=txn_ref, member_no=member_no, account_no=loan_acct.account_number,
-                gl_account='MEMBER_LOAN', tran_type='ASSET',
-                debit_amount=loan_amount, credit_amount=Decimal('0.00'),
-                reference=txn_ref, narration=f"Loan disbursement - {loan_no}",
-                bank_txn_date=datetime.now(), posted_by=current_user.username,
-                running_balance=loan_acct.balance
-            ))
-
-            # 2️⃣ Dr GL Loan Control
             gl_loan_control.balance += loan_amount
-            transactions.append(Transaction(
-                txn_no=f"TXN{uuid.uuid4().hex[:10].upper()}", member_no='M000GL',
-                account_no=gl_loan_control.account_number, gl_account='LOAN_CONTROL',
-                tran_type='ASSET', debit_amount=loan_amount, credit_amount=Decimal('0.00'),
-                reference=txn_ref, narration=f"Loan control debit for {loan_no}",
-                bank_txn_date=datetime.now(), posted_by=current_user.username,
-                running_balance=gl_loan_control.balance
-            ))
-
-            # 3️⃣ Cr Fee Income
             gl_fee_income.balance += processing_fee
-            transactions.append(Transaction(
-                txn_no=f"TXN{uuid.uuid4().hex[:10].upper()}", member_no='M000GL',
-                account_no=gl_fee_income.account_number, gl_account='FEE_INCOME',
-                tran_type='INCOME', debit_amount=Decimal('0.00'), credit_amount=processing_fee,
-                reference=txn_ref, narration=f"Loan processing fee ({loan_no})",
-                bank_txn_date=datetime.now(), posted_by=current_user.username,
-                running_balance=gl_fee_income.balance
-            ))
-
-            # 4️⃣ Cr Cash
             gl_cash.balance -= net_disbursed
-            transactions.append(Transaction(
-                txn_no=f"TXN{uuid.uuid4().hex[:10].upper()}", member_no='M000GL',
-                account_no=gl_cash.account_number, gl_account='CASH',
-                tran_type='ASSET', debit_amount=Decimal('0.00'), credit_amount=net_disbursed,
-                reference=txn_ref, narration=f"Loan disbursed to {member_no} ({loan_no})",
-                bank_txn_date=datetime.now(), posted_by=current_user.username,
-                running_balance=gl_cash.balance
-            ))
 
-            db.session.add_all(transactions)
-
-# --- Generate repayment schedule (include running principal balance)
+            # ---------------- EMI CALCULATION ----------------
             if monthly_rate > 0:
-                emi = (loan_amount * monthly_rate * (1 + monthly_rate) ** loan_period) / ((1 + monthly_rate) ** loan_period - 1)
+                emi = (loan_amount * monthly_rate * (1 + monthly_rate) ** loan_period) / \
+                      ((1 + monthly_rate) ** loan_period - 1)
             else:
                 emi = loan_amount / loan_period
+
             emi = emi.quantize(Decimal('0.01'))
 
+            # ---------------- SCHEDULE GENERATION ----------------
             principal_balance = loan_amount
             first_due_date = datetime.now().date() + relativedelta(months=1)
 
@@ -669,19 +681,15 @@ def disburse_loan():
                 interest_due = (principal_balance * monthly_rate).quantize(Decimal('0.01'))
                 principal_due = (emi - interest_due).quantize(Decimal('0.01'))
 
-                # Last installment — clear rounding residual
                 if i == loan_period:
-                    principal_due = principal_balance.quantize(Decimal('0.01'))
-
-                # Add fee to first installment interest
-                extra_fee = processing_fee if i == 1 else Decimal('0.00')
-
-                # Update balance AFTER this payment
-                new_balance = (principal_balance - principal_due).quantize(Decimal('0.01'))
-
+                    principal_due = principal_balance
                 due_date = first_due_date + relativedelta(months=i - 1)
 
-                schedule = LoanSchedule(
+                extra_fee = processing_fee if i == 1 else Decimal('0.00')
+                new_balance = (principal_balance - principal_due).quantize(Decimal('0.01'))
+                total_due=(principal_due + interest_due + monthly_premium).quantize(Decimal('0.01')),
+
+                db.session.add(LoanSchedule(
                     loan_no=new_loan.loan_no,
                     member_no=member_no,
                     installment_no=i,
@@ -692,16 +700,37 @@ def disburse_loan():
                     principal_paid=Decimal('0.00'),
                     interest_paid=Decimal('0.00'),
                     status='DUE'
-                )
-                db.session.add(schedule)
+                ))
 
-                # move to next balance
                 principal_balance = new_balance
 
-            # ✅ single commit
+            # ✅ SAVE EVERYTHING
             db.session.commit()
-            flash(f"Loan {loan_no} disbursed successfully! Schedules created, and processing fee added to 1st installment.", "success")
-            return redirect(url_for('admin.list_loans'))
+
+            # ---------------- PDF GENERATION ----------------
+            schedules = LoanSchedule.query.filter_by(
+                loan_no=loan_no
+            ).order_by(LoanSchedule.installment_no).all()
+
+            pdf_buffer = generate_schedule_pdf(new_loan, schedules, member)
+
+            # ---------------- EMAIL ----------------
+            try:
+                if member.email:
+                    send_loan_schedule_email(member, new_loan, pdf_buffer)
+            except Exception as mail_error:
+                current_app.logger.error(f"Loan email failed: {mail_error}")
+                flash("Loan disbursed but email failed.", "warning")
+
+            flash(f"Loan {loan_no} disbursed successfully!", "success")
+            return send_file(
+                    pdf_buffer,
+                    as_attachment=True,
+                    download_name=f"{loan_no}_Schedule.pdf",
+                    mimetype="application/pdf"
+                )
+
+            return redirect(url_for('admin.loans_view'))
 
         except Exception as e:
             db.session.rollback()
@@ -709,8 +738,11 @@ def disburse_loan():
             flash(f"Disbursement failed: {str(e)}", "danger")
             return render_template('admin/disburse_loan.html', form=form)
 
-    # --- GET request
     return render_template('admin/disburse_loan.html', form=form)
+
+
+
+
 
 @admin_bp.route('/loans/list', methods=['GET'])
 @login_required
@@ -776,6 +808,9 @@ def preview_loan_schedule():
         annual_rate=annual_rate * 100,
         member_no=member_no
     )
+    
+
+
 @admin_bp.route("/loans/schedule_pdf", methods=["POST"])
 @login_required
 @csrf.exempt
@@ -3548,33 +3583,51 @@ def export_loan_schedules_pdf(loan_no):
 @admin_bp.route('/loans/<loan_no>/recalculate-interest')
 @login_required
 def recalculate_loan_interest(loan_no):
+
     loan = Loan.query.filter_by(loan_no=loan_no).first_or_404()
 
-    schedules = LoanSchedule.query.filter_by(
-        loan_no=loan_no,
-        status='DUE'
+    schedules = LoanSchedule.query.filter(
+        LoanSchedule.loan_no == loan_no
     ).order_by(LoanSchedule.installment_no).all()
 
     if not schedules:
-        flash('No pending schedules to recalculate.', 'info')
+        flash('No schedules found.', 'info')
         return redirect(request.referrer)
 
-    remaining_balance = loan.balance
-    monthly_rate = loan.interest_rate / 100 / 12
+    today = date.today()
+    monthly_rate = Decimal(loan.interest_rate) / Decimal(100) / Decimal(12)
+
+    # Start with actual outstanding balance
+    outstanding_balance = loan.balance
 
     for s in schedules:
-        interest = remaining_balance * monthly_rate
-        principal = s.principal_due  # principal unchanged
 
-        s.interest_due = round(interest, 2)
-        remaining_balance -= principal
+        # If schedule already fully paid → skip
+        if s.principal_paid >= s.principal_due:
+            continue
+
+        # Past due month
+        if s.due_date < today:
+
+            # Interest on full outstanding (no reduction)
+            interest = outstanding_balance * monthly_rate
+            s.interest_due = round(interest, 2)
+
+            # DO NOT reduce outstanding balance
+            # because principal not paid
+
+        else:
+            # Future schedule → assume reducing balance
+            interest = outstanding_balance * monthly_rate
+            s.interest_due = round(interest, 2)
+
+            # Reduce only by scheduled principal
+            outstanding_balance -= s.principal_due
 
     db.session.commit()
+
     flash('Loan interest recalculated successfully.', 'success')
-
     return redirect(request.referrer)
-
-
 ##ARREARS AS PDF 
 
 @admin_bp.route('/loans/arrears/pdf')
@@ -4742,3 +4795,474 @@ def loan_statement_pdf_new():
         download_name=filename,
         mimetype="application/pdf"
     )
+
+
+##MONTHLY BALANCE FOR MEMBERS
+from sqlalchemy import func
+from datetime import date
+from sacco_app.models.monthly_balance import MemberMonthlyBalance
+def generate_monthly_balances(year, month):
+    SAVINGS_GLS = ("SAVINGS", "LIABILITY")
+    start_date = date(year, month, 1)
+    end_date = date(year + (month == 12), (month % 12) + 1, 1)
+
+    members = Member.query.all()
+
+    for member in members:
+        # Previous month closing
+        prev = MemberMonthlyBalance.query.filter(
+            MemberMonthlyBalance.member_id == member.id,
+            (MemberMonthlyBalance.year < year) |
+            (
+                (MemberMonthlyBalance.year == year) &
+                (MemberMonthlyBalance.month < month)
+            )
+        ).order_by(
+            MemberMonthlyBalance.year.desc(),
+            MemberMonthlyBalance.month.desc()
+        ).first()
+
+
+        opening_balance = prev.closing_balance if prev else 0
+
+        # Deposits → credit to SAVINGS
+        deposits = db.session.query(
+            func.coalesce(func.sum(Transaction.credit_amount), 0)
+        ).filter(
+            Transaction.member_no == member.member_no,
+            Transaction.gl_account.in_(SAVINGS_GLS),
+            Transaction.credit_amount > 0,
+            Transaction.bank_txn_date >= start_date,
+            Transaction.bank_txn_date < end_date
+        ).scalar()
+
+        # Withdrawals → debit from SAVINGS
+        withdrawals = db.session.query(
+            func.coalesce(func.sum(Transaction.debit_amount), 0)
+        ).filter(
+            Transaction.member_no == member.member_no,
+            Transaction.gl_account.in_(SAVINGS_GLS),
+            Transaction.debit_amount > 0,
+            Transaction.bank_txn_date >= start_date,
+            Transaction.bank_txn_date < end_date
+        ).scalar()
+
+
+        closing_balance = opening_balance + deposits - withdrawals
+
+        record = MemberMonthlyBalance.query.filter_by(
+            member_id=member.id,
+            year=year,
+            month=month
+        ).first()
+
+        if not record:
+            record = MemberMonthlyBalance(
+                member_id=member.id,
+                year=year,
+                month=month
+            )
+
+        record.opening_balance = opening_balance
+        record.deposits = deposits
+        record.withdrawals = withdrawals
+        record.closing_balance = closing_balance
+
+        db.session.add(record)
+
+    db.session.commit()
+
+@admin_bp.route("/generate-monthly-balances", methods=["POST"])
+@login_required
+def generate_monthly_balances_view():
+    year, month = map(int, request.form["month"].split("-"))
+
+    # Safety: prevent duplicate posting
+    exists = MemberMonthlyBalance.query.filter_by(
+        year=year, month=month
+    ).first()
+
+    if exists:
+        flash("Monthly balances already posted for this month", "warning")
+        return redirect(url_for("admin.monthly_balances"))
+
+    generate_monthly_balances(year, month)
+
+    flash("Monthly balances posted successfully", "success")
+    return redirect(url_for("admin.monthly_balances"))
+
+@admin_bp.route("/monthly-balances")
+@login_required
+def monthly_balances():
+    page = request.args.get("page", 1, type=int)
+    per_page = 20
+
+    # 🔹 Find most recent year & month
+    latest = MemberMonthlyBalance.query.order_by(
+        MemberMonthlyBalance.year.desc(),
+        MemberMonthlyBalance.month.desc()
+    ).first()
+
+    if not latest:
+        balances = []
+        pagination = None
+    else:
+        pagination = MemberMonthlyBalance.query.join(Member).filter(
+            MemberMonthlyBalance.year == latest.year,
+            MemberMonthlyBalance.month == latest.month
+        ).order_by(Member.member_no).paginate(
+            page=page,
+            per_page=per_page,
+            error_out=False
+        )
+
+        balances = pagination.items
+
+    return render_template(
+        "admin/monthly_balances.html",
+        balances=balances,
+        pagination=pagination,
+        mode="latest",
+        latest=latest
+    )
+@admin_bp.route("/monthly-balances/member")
+@login_required
+def monthly_balances_per_member():
+    member_no = request.args.get("member_no")
+    year = request.args.get("member_year", type=int)   # ✅ FIX
+
+    if not member_no or not year:
+        flash("Please enter member number and year", "warning")
+        return redirect(url_for("admin.monthly_balances"))
+
+    member = Member.query.filter_by(member_no=member_no).first()
+
+    balances = []
+    if member:
+        balances = MemberMonthlyBalance.query.filter_by(
+            member_id=member.id,
+            year=year
+        ).order_by(MemberMonthlyBalance.month).all()
+
+    return render_template(
+        "admin/monthly_balances.html",
+        balances=balances,
+        mode="member",
+        member=member,
+        year=year
+    )
+
+
+@admin_bp.route("/monthly-balances/month")
+@login_required
+def monthly_balances_by_month():
+    page = request.args.get("page", 1, type=int)
+    per_page = 20
+
+    year = request.args.get("filter_year", type=int)
+    month = request.args.get("filter_month", type=int)
+
+    if not year or not month:
+        flash("Please select both month and year", "warning")
+        return redirect(url_for("admin.monthly_balances"))
+
+    pagination = MemberMonthlyBalance.query.join(Member).filter(
+        MemberMonthlyBalance.year == year,
+        MemberMonthlyBalance.month == month
+    ).order_by(Member.member_no).paginate(
+        page=page,
+        per_page=per_page,
+        error_out=False
+    )
+
+    return render_template(
+        "admin/monthly_balances.html",
+        balances=pagination.items,
+        pagination=pagination,
+        mode="month",
+        year=year,
+        month=month
+    )
+
+from sqlalchemy import func
+
+def get_opening_balance(member, start_date):
+    """
+    Determine opening balance for a member at the start of a month.
+    Priority:
+    1) Previous monthly balance
+    2) Fallback to SAVINGS GL balance before the month
+    """
+
+    # 1️⃣ Try previous monthly balance
+    prev = MemberMonthlyBalance.query.filter(
+        MemberMonthlyBalance.member_id == member.id,
+        (MemberMonthlyBalance.year * 100 + MemberMonthlyBalance.month) <
+        (start_date.year * 100 + start_date.month)
+    ).order_by(
+        MemberMonthlyBalance.year.desc(),
+        MemberMonthlyBalance.month.desc()
+    ).first()
+
+    if prev:
+        return prev.closing_balance
+
+    # 2️⃣ Fallback to GL (CRITICAL FIX)
+    return db.session.query(
+        func.coalesce(
+            func.sum(Transaction.debit_amount - Transaction.credit_amount),
+            0
+        )
+    ).filter(
+        Transaction.member_no == member.member_no,
+        Transaction.gl_account == "SAVINGS",
+        Transaction.bank_txn_date < start_date
+    ).scalar()
+
+
+from datetime import date
+from sqlalchemy import func
+
+from sacco_app.extensions import db
+from sacco_app.models.member import Member
+from sacco_app.models import Transaction
+from sacco_app.models.monthly_balance import MemberMonthlyBalance
+from sqlalchemy import text
+
+SAVINGS_GL = ("SAVINGS", "LIABILITY")
+
+
+def rebuild_monthly_balances(start_year=2019, end_year=2025):
+    print("⚠️ Truncating member_monthly_balances...")
+    db.session.execute(
+        text("TRUNCATE TABLE member_monthly_balances RESTART IDENTITY CASCADE"))
+    db.session.commit()
+
+    members = Member.query.all()
+
+    for year in range(start_year, end_year + 1):
+        for month in range(1, 13):
+            start_date = date(year, month, 6)
+            end_date = date(year + (month == 12), (month % 12) + 1, 1)
+
+            print(f"Processing {year}-{month:02d}...")
+
+            for member in members:
+                # 🔹 Get latest previous balance (not strictly previous month)
+                opening_balance = get_opening_balance(member, start_date)
+
+
+                # 🔹 Deposits (credit to SAVINGS)
+                deposits = db.session.query(
+                    func.coalesce(func.sum(Transaction.credit_amount), 0)
+                ).filter(
+                    Transaction.member_no == member.member_no,
+                    Transaction.gl_account.in_(SAVINGS_GL),
+                    Transaction.credit_amount > 0,
+                    Transaction.bank_txn_date >= start_date,
+                    Transaction.bank_txn_date < end_date
+                ).scalar()
+
+                # 🔹 Withdrawals (debit from SAVINGS)
+                withdrawals = db.session.query(
+                    func.coalesce(func.sum(Transaction.debit_amount), 0)
+                ).filter(
+                    Transaction.member_no == member.member_no,
+                    Transaction.gl_account.in_(SAVINGS_GL),
+                    Transaction.debit_amount > 0,
+                    Transaction.bank_txn_date >= start_date,
+                    Transaction.bank_txn_date < end_date
+                ).scalar()
+
+
+                closing_balance = opening_balance + deposits - withdrawals
+
+                record = MemberMonthlyBalance(
+                    member_id=member.id,
+                    year=year,
+                    month=month,
+                    opening_balance=opening_balance,
+                    deposits=deposits,
+                    withdrawals=withdrawals,
+                    closing_balance=closing_balance
+                )
+
+                db.session.add(record)
+
+            db.session.commit()
+
+    print("✅ Monthly balances rebuild completed successfully.")
+
+## LOANS BALANCES ADJUSTMENTS
+@admin_bp.route('/loans/adjustment', methods=['GET', 'POST'])
+@login_required
+def loan_adjustment_page():
+
+    loans = []
+    member = None
+    member_no = None
+
+    if request.method == 'POST':
+
+        member_no = request.form.get('member_no').strip()
+
+        member = Member.query.filter_by(member_no=member_no).first()
+
+        if not member:
+            flash("Member not found.", "danger")
+        else:
+            loans = Loan.query.filter(
+                Loan.member_no == member_no,
+                Loan.status.in_(["Active", "Disbursed"]),
+                Loan.balance > 0
+            ).all()
+
+            if not loans:
+                flash("No active loans for this member.", "warning")
+
+    return render_template(
+        "admin/loan_adjustment_modal.html",
+        loans=loans,
+        member=member,
+        member_no=member_no
+    )
+"""Loan Adjustment Route – posts increase/decrease adjustments with GL entries."""
+
+from decimal import Decimal
+from datetime import datetime
+import uuid
+from sacco_app.models.loan_adjustment import LoanAdjustment
+
+@admin_bp.route('/loans/adjust', methods=['POST'])
+@login_required
+def adjust_loan():
+
+    try:
+        # ---------------- INPUTS ----------------
+        loan_no = request.form.get('loan_no')
+        adjustment_type = request.form.get('adjustment_type')  # increase / decrease
+        amount = Decimal(request.form.get('amount')).quantize(Decimal('0.01'))
+        narration = request.form.get('narration')
+
+        if not loan_no or amount <= 0:
+            flash("Invalid adjustment input.", "danger")
+            return redirect(request.referrer)
+
+        # ---------------- FETCH LOAN ----------------
+        loan = Loan.query.filter_by(loan_no=loan_no).first()
+
+        if not loan:
+            flash("Loan not found.", "danger")
+            return redirect(request.referrer)
+
+        if loan.status not in ["Active", "Disbursed"]:
+            flash("Only active loans can be adjusted.", "danger")
+            return redirect(request.referrer)
+
+        # ---------------- ACCOUNTS ----------------
+        loan_acct = SaccoAccount.query.filter_by(
+            account_number=loan.loan_account
+        ).first()
+
+        gl_loan_control = SaccoAccount.query.filter_by(
+            account_number='M000GL_LOAN'
+        ).first()
+
+        gl_adjustment = SaccoAccount.query.filter_by(
+            account_number='M000GL_LOAN_ADJ'
+        ).first()
+
+        if not all([loan_acct, gl_loan_control, gl_adjustment]):
+            flash("Missing GL accounts for adjustment.", "danger")
+            return redirect(request.referrer)
+
+        # ---------------- VALIDATIONS ----------------
+        if adjustment_type == "decrease" and loan.balance < amount:
+            flash("Adjustment exceeds loan balance.", "danger")
+            return redirect(request.referrer)
+
+        # ---------------- TXN REF ----------------
+        txn_ref = f"ADJ{uuid.uuid4().hex[:10].upper()}"
+
+        # ---------------- APPLY ADJUSTMENT ----------------
+        if adjustment_type == "increase":
+
+            loan.balance += amount
+            loan_acct.balance += amount
+            gl_loan_control.balance += amount
+            gl_adjustment.balance += amount
+
+            dr_account = loan.loan_account
+            cr_account = gl_adjustment.account_number
+
+        else:  # decrease
+
+            loan.balance -= amount
+            loan_acct.balance -= amount
+            gl_loan_control.balance -= amount
+            gl_adjustment.balance -= amount
+            loan_acct_balance =loan_acct.balance
+            gl_loan_control_balance = gl_loan_control.balance 
+
+            dr_account = gl_adjustment.account_number
+            cr_account = loan.loan_account
+
+        # ---------------- RECORD TRANSACTION ----------------
+        txn = Transaction(
+            txn_no=f"ADJ{uuid.uuid4().hex[:10].upper()}",
+            reference=txn_ref,
+            member_no=loan.member_no,
+            account_no=loan.loan_account,
+            gl_account="MEMBER_LOAN",
+            tran_type="LOAN_ADJST",
+            debit_amount=amount,    
+            credit_amount=Decimal('0'),            
+            narration=narration,
+            bank_txn_date=datetime.now(),
+            running_balance=loan_acct.balance,
+            posted_by=current_user.id,
+            created_at=datetime.now()
+        )
+
+        db.session.add(txn)
+        
+        txn = Transaction(
+            txn_no=f"ADJ{uuid.uuid4().hex[:10].upper()}",
+            reference=txn_ref,
+            member_no="M000GL",
+            account_no=gl_loan_control.account_number,
+            gl_account="LOAN_CONTROL",
+            tran_type="ASSET",
+            debit_amount=Decimal('0'),    
+            credit_amount=amount,            
+            narration=f"Loan adjustment{loan.member_no}",
+            bank_txn_date=datetime.now(),
+            running_balance=gl_loan_control.balance,
+            posted_by=current_user.id,
+            created_at=datetime.now()
+        )
+
+        db.session.add(txn)
+        
+        
+        # ---------------- OPTIONAL: SAVE ADJUSTMENT LOG ----------------
+        adjustment = LoanAdjustment(
+            loan_no=loan.loan_no,
+            member_no=loan.member.member_no,
+            amount=amount,
+            adjustment_type=adjustment_type,
+            narration=narration,
+            created_by=current_user.id
+        )
+
+        db.session.add(adjustment)
+
+        db.session.commit()
+
+        flash(f"Loan adjustment posted successfully ({txn_ref})", "success")
+        return redirect(url_for('admin.loan_adjustment_page'))
+    except Exception as e:
+        db.session.rollback()
+        import traceback; traceback.print_exc()
+        flash(f"Loan adjustment failed: {str(e)}", "danger")
+        return redirect(request.referrer)
