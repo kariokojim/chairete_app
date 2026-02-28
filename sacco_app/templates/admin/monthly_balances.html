@@ -1,0 +1,145 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="card">
+  <div class="card-header">
+    <strong>Post Monthly Member Balances</strong>
+  </div>
+
+  <div class="card-body">
+
+    <!-- POST FORM -->
+    <form method="POST"
+          action="{{ url_for('admin.generate_monthly_balances_view') }}"
+          class="row g-2 mb-3">
+
+      <div class="col-md-3">
+        <input type="month"
+               name="month"
+               class="form-control"
+               required>
+      </div>
+
+      <div class="col-md-3">
+        <button class="btn btn-primary">
+          Post Monthly Balances
+        </button>
+      </div>
+    </form>
+
+    <form class="row g-2 mb-3" method="GET">
+
+  <!-- MEMBER + YEAR -->
+  <div class="col-md-3">
+    <input type="text" name="member_no"
+           class="form-control"
+           placeholder="Member No (e.g M0003)">
+  </div>
+
+  <div class="col-md-2">
+    <input type="number" name="member_year"
+           class="form-control"
+           placeholder="Year">
+  </div>
+
+  <div class="col-md-2">
+    <button formaction="{{ url_for('admin.monthly_balances_per_member') }}"
+            class="btn btn-secondary w-100">
+      Member / Year
+    </button>
+  </div>
+
+  <!-- MONTH + YEAR -->
+  <div class="col-md-2">
+    <select name="filter_month" class="form-control">
+      {% for i in range(1,13) %}
+      <option value="{{ i }}">{{ i | month_name }}</option>
+      {% endfor %}
+    </select>
+  </div>
+
+  <div class="col-md-2">
+    <input type="number" name="filter_year"
+           class="form-control"
+           placeholder="Year">
+  </div>
+
+  <div class="col-md-1">
+    <button formaction="{{ url_for('admin.monthly_balances_by_month') }}"
+            class="btn btn-primary w-100">
+      Month
+    </button>
+  </div>
+
+</form>
+
+
+    <table class="table table-bordered table-sm table-fixed">
+	
+      <thead class="table-light">
+        <tr>
+		<th class="col-member-no">Member No</th>
+		<th class="col-member-name">Member Name</th>
+
+          <th>Year</th>
+          <th>Month</th>
+          <th class="text-end">Opening</th>
+          <th class="text-end">Deposits</th>
+          <th class="text-end">Withdrawals</th>
+          <th class="text-end">Closing</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in balances %}
+        <tr>
+		<td class="col-member-no">{{ row.member.member_no }}</td>
+		<td class="col-member-name">{{ row.member.name }}</td>
+          <td>{{ row.year }}</td>
+         <td>  {{ row.month | month_name }}</td>
+          <td class="text-end">{{ "{:,.2f}".format(row.opening_balance) }}</td>
+          <td class="text-end">{{ "{:,.2f}".format(row.deposits) }}</td>
+          <td class="text-end">{{ "{:,.2f}".format(row.withdrawals) }}</td>
+          <td class="text-end">{{ "{:,.2f}".format(row.closing_balance) }}</td>
+        </tr>
+        {% else %}
+        <tr>
+          <td colspan="7" class="text-center text-muted">
+            No monthly balances posted
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+{% if pagination %}
+<nav>
+  <ul class="pagination pagination-sm justify-content-end">
+    {% if pagination.has_prev %}
+    <li class="page-item">
+      <a class="page-link"
+         href="{{ url_for(request.endpoint, page=pagination.prev_num, **request.args) }}">
+        Prev
+      </a>
+    </li>
+    {% endif %}
+
+    <li class="page-item disabled">
+      <span class="page-link">
+        Page {{ pagination.page }} of {{ pagination.pages }}
+      </span>
+    </li>
+
+    {% if pagination.has_next %}
+    <li class="page-item">
+      <a class="page-link"
+         href="{{ url_for(request.endpoint, page=pagination.next_num, **request.args) }}">
+        Next
+      </a>
+    </li>
+    {% endif %}
+  </ul>
+</nav>
+{% endif %}
+
+  </div>
+</div>
+{% endblock %}

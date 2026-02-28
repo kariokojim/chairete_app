@@ -1,0 +1,189 @@
+{% extends "base.html" %}
+
+{% block content %}
+
+<div class="container mt-3">
+
+    <h4>Loan Adjustment</h4>
+
+    <!-- 🔎 Member Search -->
+    <form method="POST" class="card p-3 shadow-sm mb-3">
+
+        <div class="row">
+            <div class="col-md-4">
+                <label class="form-label">Member Number</label>
+                <input type="text"
+                       name="member_no"
+                       class="form-control"
+                       placeholder="Enter member number"
+                       value="{{ member_no or '' }}"
+                       required>
+            </div>
+
+            <div class="col-md-2 d-flex align-items-end">
+                <button class="btn btn-primary w-100">
+                    <i class="bi bi-search"></i> Search
+                </button>
+            </div>
+        </div>
+
+    </form>
+
+    <!-- 👤 Member Info -->
+    {% if member %}
+    <div class="alert alert-light border">
+        <strong>Member:</strong> {{ member.full_name }} <br>
+        <strong>Member No:</strong> {{ member.member_no }}
+    </div>
+    {% endif %}
+
+    <!-- 💰 Loans Table -->
+    {% if loans %}
+    <table class="table table-bordered table-sm">
+        <thead class="table-light">
+            <tr>
+                <th>Loan No</th>
+                <th>Loan Amount</th>
+                <th>Balance</th>
+                <th>Action</th>
+            </tr>
+        </thead>
+        <tbody>
+
+            {% for loan in loans %}
+            <tr>
+                <td>{{ loan.loan_no }}</td>
+                <td>KES {{ '{:,.2f}'.format(loan.loan_amount) }}</td>
+                <td>KES {{ '{:,.2f}'.format(loan.balance) }}</td>
+                <td>
+                    <button class="btn btn-warning btn-sm"
+                            data-bs-toggle="modal"
+                            data-bs-target="#loanAdjustmentModal"
+                            data-loan="{{ loan.loan_no }}"
+                            data-member="{{ member.full_name }}"
+                            data-balance="{{ loan.balance }}">
+                        Adjust
+                    </button>
+                </td>
+            </tr>
+            {% endfor %}
+
+        </tbody>
+    </table>
+    {% endif %}
+
+</div>
+
+<!-- ================= LOAN ADJUSTMENT MODAL ================= -->
+<div class="modal fade" id="loanAdjustmentModal" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content shadow-lg">
+
+            <form method="POST" action="{{ url_for('admin.adjust_loan') }}">
+
+                <div class="modal-header bg-warning">
+                    <h5 class="modal-title">
+                        <i class="bi bi-cash-stack"></i> Loan Adjustment
+                    </h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+
+                <div class="modal-body">
+
+                    <input type="hidden" name="loan_no" id="adjLoanNo">
+
+                    <div class="mb-2">
+                        <label class="form-label">Loan No</label>
+                        <input type="text" id="adjLoanDisplay"
+                               class="form-control" readonly>
+                    </div>
+
+                    <div class="mb-2">
+                        <label class="form-label">Member</label>
+                        <input type="text" id="adjMember"
+                               class="form-control" readonly>
+                    </div>
+
+                    <div class="mb-2">
+                        <label class="form-label">Current Balance</label>
+                        <input type="text" id="adjBalance"
+                               class="form-control" readonly>
+                    </div>
+
+                    <div class="mb-2">
+                        <label class="form-label">Adjustment Type</label>
+                        <select name="adjustment_type" class="form-select" required>
+                            <option value="">-- Select Adjustment --</option>
+                            <option value="increase">Increase Loan Balance</option>
+                            <option value="decrease">Decrease Loan Balance</option>
+                        </select>
+                    </div>
+
+                    <div class="mb-2">
+                        <label class="form-label">Amount</label>
+                        <input type="number"
+                               step="0.01"
+                               min="0.01"
+                               name="amount"
+                               class="form-control"
+                               required>
+                    </div>
+
+                    <div class="mb-2">
+                        <label class="form-label">Narration / Reason</label>
+                        <textarea name="narration"
+                                  class="form-control"
+                                  rows="3"
+                                  required></textarea>
+                    </div>
+
+                    <div class="alert alert-light border mt-3">
+                        <small class="text-muted">
+                            ⚠ Loan adjustments affect balances and audit trails.
+                        </small>
+                    </div>
+
+                </div>
+
+                <div class="modal-footer">
+
+                    <button type="button"
+                            class="btn btn-secondary"
+                            data-bs-dismiss="modal">
+                        Cancel
+                    </button>
+
+                    <button type="submit"
+                            class="btn btn-warning">
+                        <i class="bi bi-check-circle"></i> Post Adjustment
+                    </button>
+
+                </div>
+
+            </form>
+
+        </div>
+    </div>
+</div>
+
+<!-- ================= MODAL SCRIPT ================= -->
+<script>
+const adjustmentModal = document.getElementById('loanAdjustmentModal');
+
+adjustmentModal.addEventListener('show.bs.modal', function (event) {
+
+    const button = event.relatedTarget;
+
+    const loanNo = button.getAttribute('data-loan');
+    const member = button.getAttribute('data-member');
+    const balance = button.getAttribute('data-balance');
+
+    document.getElementById('adjLoanNo').value = loanNo;
+    document.getElementById('adjLoanDisplay').value = loanNo;
+    document.getElementById('adjMember').value = member;
+    document.getElementById('adjBalance').value =
+        "KES " + parseFloat(balance).toLocaleString();
+});
+</script>
+
+{% endblock %}
