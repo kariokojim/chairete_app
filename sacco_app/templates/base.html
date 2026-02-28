@@ -161,6 +161,7 @@
         <li><a class="nav-link" href="{{ url_for('admin.view_member_loan_schedules')}}">Loan Schedules</a></li>
 		<li><a class="nav-link" href="{{ url_for('admin.loans_view') }}">List All Loans</a></li>
 		<li><a class="nav-link" href="{{ url_for('admin.loan_arrears_view') }}">View Loan Arrears </a></li>
+		<li><a class="nav-link" href="{{ url_for('admin.loan_adjustment_page') }}">Loan adjust </a></li>
 		<li><a class="nav-link" href="{{ url_for('admin.loan_par_view') }}">Portfolio at Risk(PAR%)</a></li>
         <li><a class="nav-link" href="{{ url_for('admin.upload_bank_postings') }}">Upload Repayments</a></li>
         <li><a class="nav-link" href="{{ url_for('admin.loan_prepayment') }}">Loan Prepayment</a></li>
@@ -203,6 +204,10 @@
   <!-- Audit -->
   <li class="nav-item">
     <a class="nav-link" href="{{ url_for('admin.audit_logs') }}">🕵️ Audit Logs</a>
+  </li>
+ <!-- Audit -->
+  <li class="nav-item">
+    <a class="nav-link" href="{{ url_for('admin.monthly_balances') }}">🕵️Monthly Balances</a>
   </li>
 
 </ul>
