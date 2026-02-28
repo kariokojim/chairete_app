@@ -5,6 +5,7 @@ import os
 from .config import Config
 from .extensions import db, login_manager, migrate, csrf
 from sacco_app.utils.sidebar import SIDEBAR_ITEMS
+import calendar
 
 def create_app():
     app = Flask(__name__)
@@ -13,6 +14,10 @@ def create_app():
     app.config['UPLOAD_FOLDER'] = os.path.join(
         BASE_DIR, 'uploads', 'bank_statements'
     )
+
+    @app.template_filter("month_name")
+    def month_name_filter(month_number):
+        return calendar.month_name[int(month_number)]
 
     os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 
