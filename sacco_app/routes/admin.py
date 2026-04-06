@@ -4798,178 +4798,147 @@ def loan_statement_pdf_new():
 
 
 ##MONTHLY BALANCE FOR MEMBERS
-from sqlalchemy import func
-from datetime import date
-from sacco_app.models.monthly_balance import MemberMonthlyBalance
-def generate_monthly_balances(year, month):
-    SAVINGS_GLS = ("SAVINGS", "LIABILITY")
-    start_date = date(year, month, 1)
-    end_date = date(year + (month == 12), (month % 12) + 1, 1)
+import re
+import calendar
+from flask import request, redirect, url_for, flash
+from sqlalchemy import text
 
-    members = Member.query.all()
-
-    for member in members:
-        # Previous month closing
-        prev = MemberMonthlyBalance.query.filter(
-            MemberMonthlyBalance.member_id == member.id,
-            (MemberMonthlyBalance.year < year) |
-            (
-                (MemberMonthlyBalance.year == year) &
-                (MemberMonthlyBalance.month < month)
-            )
-        ).order_by(
-            MemberMonthlyBalance.year.desc(),
-            MemberMonthlyBalance.month.desc()
-        ).first()
-
-
-        opening_balance = prev.closing_balance if prev else 0
-
-        # Deposits → credit to SAVINGS
-        deposits = db.session.query(
-            func.coalesce(func.sum(Transaction.credit_amount), 0)
-        ).filter(
-            Transaction.member_no == member.member_no,
-            Transaction.gl_account.in_(SAVINGS_GLS),
-            Transaction.credit_amount > 0,
-            Transaction.bank_txn_date >= start_date,
-            Transaction.bank_txn_date < end_date
-        ).scalar()
-
-        # Withdrawals → debit from SAVINGS
-        withdrawals = db.session.query(
-            func.coalesce(func.sum(Transaction.debit_amount), 0)
-        ).filter(
-            Transaction.member_no == member.member_no,
-            Transaction.gl_account.in_(SAVINGS_GLS),
-            Transaction.debit_amount > 0,
-            Transaction.bank_txn_date >= start_date,
-            Transaction.bank_txn_date < end_date
-        ).scalar()
-
-
-        closing_balance = opening_balance + deposits - withdrawals
-
-        record = MemberMonthlyBalance.query.filter_by(
-            member_id=member.id,
-            year=year,
-            month=month
-        ).first()
-
-        if not record:
-            record = MemberMonthlyBalance(
-                member_id=member.id,
-                year=year,
-                month=month
-            )
-
-        record.opening_balance = opening_balance
-        record.deposits = deposits
-        record.withdrawals = withdrawals
-        record.closing_balance = closing_balance
-
-        db.session.add(record)
-
-    db.session.commit()
-
-@admin_bp.route("/generate-monthly-balances", methods=["POST"])
+@admin_bp.route("/run-month-end", methods=["POST"])
 @login_required
-def generate_monthly_balances_view():
-    year, month = map(int, request.form["month"].split("-"))
+def run_month_end():
 
-    # Safety: prevent duplicate posting
-    exists = MemberMonthlyBalance.query.filter_by(
-        year=year, month=month
-    ).first()
+    year = int(request.form.get("year"))
+    month = int(request.form.get("month"))
+    export_excel = request.form.get("export_excel")
 
-    if exists:
-        flash("Monthly balances already posted for this month", "warning")
-        return redirect(url_for("admin.monthly_balances"))
+    try:
+        # 🔥 Run month-end function
+        db.session.execute(
+            text("SELECT generate_all_members_monthly_balance(:year, :month)"),
+            {"year": year, "month": month}
+        )
+        db.session.commit()
 
-    generate_monthly_balances(year, month)
+        month_name = calendar.month_name[month]
 
-    flash("Monthly balances posted successfully", "success")
+        # ✅ Export if requested
+        if export_excel:
+            flash(f"✅ {month_name} {year} processed successfully.", "success")
+            return redirect(url_for("admin.export_monthly_balances", year=year, month=month))
+
+        flash(f"✅ Month-end completed for {month_name} {year}", "success")
+
+    except Exception as e:
+        db.session.rollback()
+
+        error_msg = str(e)
+
+        # 🔥 Handle "previous month not processed"
+        if "Previous month" in error_msg:
+
+            match = re.search(r'Previous month \((\d+)\).*month (\d+)/(\d+)', error_msg)
+
+            if match:
+                prev_month = int(match.group(1))
+                curr_month = int(match.group(2))
+                err_year = int(match.group(3))
+
+                prev_month_name = calendar.month_name[prev_month]
+                curr_month_name = calendar.month_name[curr_month]
+
+                flash(
+                    f"❌ Cannot run {curr_month_name} {err_year}. "
+                    f"Please run {prev_month_name} {err_year} first.",
+                    "danger"
+                )
+            else:
+                flash("❌ Please run the previous month first.", "danger")
+
+        else:
+            # 🔥 Generic fallback (cleaned)
+            flash("❌ Month-end failed. Please contact admin or check logs.", "danger")
+
     return redirect(url_for("admin.monthly_balances"))
+    
+### export to excel
+
+@admin_bp.route("/export-monthly-balances")
+@login_required
+def export_monthly_balances():
+
+    year = request.args.get("year", type=int)
+    month = request.args.get("month", type=int)
+
+    import pandas as pd
+    from io import BytesIO
+    from flask import send_file
+
+    result = db.session.execute(text("""
+        SELECT *
+        FROM member_monthly_balances
+        WHERE year = :year AND month = :month
+        ORDER BY member_no
+    """), {"year": year, "month": month})
+
+    df = pd.DataFrame(result.fetchall(), columns=result.keys())
+
+    output = BytesIO()
+    df.to_excel(output, index=False)
+    output.seek(0)
+
+    return send_file(
+        output,
+        download_name=f"monthly_balances_{year}_{month}.xlsx",
+        as_attachment=True
+    )
+    
+from sqlalchemy import desc
 
 @admin_bp.route("/monthly-balances")
 @login_required
 def monthly_balances():
+
     page = request.args.get("page", 1, type=int)
     per_page = 20
 
-    # 🔹 Find most recent year & month
-    latest = MemberMonthlyBalance.query.order_by(
-        MemberMonthlyBalance.year.desc(),
-        MemberMonthlyBalance.month.desc()
-    ).first()
+    # Optional filters
+    year = request.args.get("year", type=int)
+    month = request.args.get("month", type=int)
 
-    if not latest:
-        balances = []
-        pagination = None
-    else:
-        pagination = MemberMonthlyBalance.query.join(Member).filter(
-            MemberMonthlyBalance.year == latest.year,
-            MemberMonthlyBalance.month == latest.month
-        ).order_by(Member.member_no).paginate(
-            page=page,
-            per_page=per_page,
-            error_out=False
+    query = MemberMonthlyBalance.query.join(Member)
+
+    # If filter applied
+    if year and month:
+        query = query.filter(
+            MemberMonthlyBalance.year == year,
+            MemberMonthlyBalance.month == month
         )
+    else:
+        # 🔥 Get latest processed month automatically
+        latest = MemberMonthlyBalance.query.order_by(
+            MemberMonthlyBalance.year.desc(),
+            MemberMonthlyBalance.month.desc()
+        ).first()
 
-        balances = pagination.items
+        if latest:
+            year = latest.year
+            month = latest.month
 
-    return render_template(
-        "admin/monthly_balances.html",
-        balances=balances,
-        pagination=pagination,
-        mode="latest",
-        latest=latest
-    )
-@admin_bp.route("/monthly-balances/member")
-@login_required
-def monthly_balances_per_member():
-    member_no = request.args.get("member_no")
-    year = request.args.get("member_year", type=int)   # ✅ FIX
+            query = query.filter(
+                MemberMonthlyBalance.year == year,
+                MemberMonthlyBalance.month == month
+            )
+        else:
+            # No data yet
+            return render_template(
+                "admin/monthly_balances.html",
+                balances=[],
+                pagination=None,
+                year=None,
+                month=None
+            )
 
-    if not member_no or not year:
-        flash("Please enter member number and year", "warning")
-        return redirect(url_for("admin.monthly_balances"))
-
-    member = Member.query.filter_by(member_no=member_no).first()
-
-    balances = []
-    if member:
-        balances = MemberMonthlyBalance.query.filter_by(
-            member_id=member.id,
-            year=year
-        ).order_by(MemberMonthlyBalance.month).all()
-
-    return render_template(
-        "admin/monthly_balances.html",
-        balances=balances,
-        mode="member",
-        member=member,
-        year=year
-    )
-
-
-@admin_bp.route("/monthly-balances/month")
-@login_required
-def monthly_balances_by_month():
-    page = request.args.get("page", 1, type=int)
-    per_page = 20
-
-    year = request.args.get("filter_year", type=int)
-    month = request.args.get("filter_month", type=int)
-
-    if not year or not month:
-        flash("Please select both month and year", "warning")
-        return redirect(url_for("admin.monthly_balances"))
-
-    pagination = MemberMonthlyBalance.query.join(Member).filter(
-        MemberMonthlyBalance.year == year,
-        MemberMonthlyBalance.month == month
-    ).order_by(Member.member_no).paginate(
+    pagination = query.order_by(Member.member_no).paginate(
         page=page,
         per_page=per_page,
         error_out=False
@@ -4979,45 +4948,52 @@ def monthly_balances_by_month():
         "admin/monthly_balances.html",
         balances=pagination.items,
         pagination=pagination,
-        mode="month",
         year=year,
         month=month
     )
 
-from sqlalchemy import func
 
-def get_opening_balance(member, start_date):
-    """
-    Determine opening balance for a member at the start of a month.
-    Priority:
-    1) Previous monthly balance
-    2) Fallback to SAVINGS GL balance before the month
-    """
+@admin_bp.route("/monthly-balances/filter")
+@login_required
+def monthly_balances_filter():
 
-    # 1️⃣ Try previous monthly balance
-    prev = MemberMonthlyBalance.query.filter(
-        MemberMonthlyBalance.member_id == member.id,
-        (MemberMonthlyBalance.year * 100 + MemberMonthlyBalance.month) <
-        (start_date.year * 100 + start_date.month)
+    year = request.args.get("year", type=int)
+    month = request.args.get("month", type=int)
+
+    return redirect(url_for(
+        "admin.monthly_balances",
+        year=year,
+        month=month
+    ))
+
+@admin_bp.route("/member-balance/<member_no>")
+@login_required
+def member_balance(member_no):
+
+    page = request.args.get("page", 1, type=int)
+    per_page = 12  # 12 months per page (1 year)
+
+    member = Member.query.filter_by(member_no=member_no).first_or_404()
+
+    pagination = MemberMonthlyBalance.query.filter_by(
+        member_no=member_no
     ).order_by(
         MemberMonthlyBalance.year.desc(),
         MemberMonthlyBalance.month.desc()
-    ).first()
+    ).paginate(
+        page=page,
+        per_page=per_page,
+        error_out=False
+    )
 
-    if prev:
-        return prev.closing_balance
+    return render_template(
+        "admin/member_balance.html",
+        member=member,
+        balances=pagination.items,
+        pagination=pagination
+    )
 
-    # 2️⃣ Fallback to GL (CRITICAL FIX)
-    return db.session.query(
-        func.coalesce(
-            func.sum(Transaction.debit_amount - Transaction.credit_amount),
-            0
-        )
-    ).filter(
-        Transaction.member_no == member.member_no,
-        Transaction.gl_account == "SAVINGS",
-        Transaction.bank_txn_date < start_date
-    ).scalar()
+
 
 
 from datetime import date
