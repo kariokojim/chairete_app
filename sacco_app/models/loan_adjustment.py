@@ -9,7 +9,7 @@ class LoanAdjustment(db.Model):
 
     id = db.Column(db.Integer, primary_key=True)
     loan_no = db.Column(db.String, db.ForeignKey('loans.id'), nullable=False)
-    member_no = db.Column(db.String, db.ForeignKey('members.id'), nullable=False)
+    member_no = db.Column(db.String, db.ForeignKey('members.member_no'), nullable=False)
 
     amount = db.Column(db.Numeric(12,2), nullable=False)
     adjustment_type = db.Column(db.String(10), nullable=False)  # increase / decrease

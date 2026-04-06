@@ -91,3 +91,5 @@ def create_default_accounts(mapper, connection, target):
             'created_by': target.created_by
         }
     ])
+
+
