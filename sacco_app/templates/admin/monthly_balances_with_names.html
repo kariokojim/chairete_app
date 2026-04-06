@@ -23,7 +23,7 @@
 
       <select name="year" class="form-control">
         <option value="">Year</option>
-        {% for y in range(2025,2031) %}
+        {% for y in range(2024,2031) %}
         <option value="{{ y }}" {% if y == year %}selected{% endif %}>
           {{ y }}
         </option>
@@ -56,88 +56,80 @@
 
   </div>
 
+  <!-- 📋 TABLE -->
   <table class="table table-bordered table-sm table-hover">
-  <thead class="table-light">
-    <tr>
-      <th>Member No</th>
-      <th>Opening (Savings)</th>
-      <th>Opening (Loan)</th>
-      <th>Deposits</th>
-      <th>Loan Paid</th>
-      <th>Interest Paid</th>
-      <th>Closing (Savings)</th>
-      <th>Closing (Loan)</th>
-    </tr>
-  </thead>
-
-  <tbody>
-
-    {% set ns = namespace(
-        total_deposits=0,
-        total_loan_paid=0,
-        total_interest=0,
-        total_closing_savings=0,
-        total_closing_loan=0
-    ) %}
-
-    {% if balances %}
-      {% for row in balances %}
-      <tr style="cursor:pointer"
-          onclick="window.location='{{ url_for('admin.member_balance', member_no=row.member.member_no) }}'">
-
-        <td><strong>{{ row.member.member_no }}</strong></td>
-
-        <td>{{ row.opening_balance_savings }}</td>
-        <td>{{ row.opening_balance_loan }}</td>
-
-        <td>
-          {{ row.deposits }}
-          {% set ns.total_deposits = ns.total_deposits + (row.deposits or 0) %}
-        </td>
-
-        <td>
-          {{ row.loan_paid }}
-          {% set ns.total_loan_paid = ns.total_loan_paid + (row.loan_paid or 0) %}
-        </td>
-
-        <td>
-          {{ row.interest_paid }}
-          {% set ns.total_interest = ns.total_interest + (row.interest_paid or 0) %}
-        </td>
-
-        <td>
-          {{ row.closing_balance_savings }}
-          {% set ns.total_closing_savings = ns.total_closing_savings + (row.closing_balance_savings or 0) %}
-        </td>
-
-        <td>
-          {{ row.closing_balance_loan }}
-          {% set ns.total_closing_loan = ns.total_closing_loan + (row.closing_balance_loan or 0) %}
-        </td>
-
-      </tr>
-      {% endfor %}
-
-      <!-- 🔥 TOTAL ROW -->
-      <tr class="table-secondary">
-        <td colspan="3"><strong>Totals</strong></td>
-        <td><strong>{{ ns.total_deposits }}</strong></td>
-        <td><strong>{{ ns.total_loan_paid }}</strong></td>
-        <td><strong>{{ ns.total_interest }}</strong></td>
-        <td><strong>{{ ns.total_closing_savings }}</strong></td>
-        <td><strong>{{ ns.total_closing_loan }}</strong></td>
-      </tr>
-
-    {% else %}
+    <thead class="table-light">
       <tr>
-        <td colspan="8" class="text-center text-muted">
-          No data available for selected period
-        </td>
+        <th>Member No</th>
+        <th>Name</th>
+        <th>Opening</th>
+        <th>Deposits</th>
+        <th>Withdrawals</th>
+        <th>Closing</th>
+        <th>Loan Balance</th>
       </tr>
-    {% endif %}
+    </thead>
 
-  </tbody>
-</table>
+    <tbody>
+
+      {% set ns = namespace(
+          total_deposits=0,
+          total_withdrawals=0,
+          total_closing=0
+      ) %}
+
+      {% if balances %}
+        {% for row in balances %}
+        <tr style="cursor:pointer"
+            onclick="window.location='{{ url_for('admin.member_balance', member_no=row.member.member_no) }}'">
+			
+          <td><strong>{{ row.member.member_no }}</strong></td>
+          <td>{{ row.member.name }}</td>
+
+          <td>{{ row.opening_balance_savings }}</td>
+
+          <td>
+            {{ row.deposits }}
+            {% set ns.total_deposits = ns.total_deposits + (row.deposits or 0) %}
+          </td>
+
+          <td>
+            {{ row.withdrawals }}
+            {% set ns.total_withdrawals = ns.total_withdrawals + (row.withdrawals or 0) %}
+          </td>
+
+          <td>
+            {{ row.closing_balance_savings }}
+            {% set ns.total_closing = ns.total_closing + (row.closing_balance_savings or 0) %}
+          </td>
+
+          <td>
+            {{ row.closing_balance_loan }}
+          </td>
+
+        </tr>
+        {% endfor %}
+
+        <!-- 🔥 TOTAL ROW -->
+        <tr class="table-secondary">
+          <td colspan="3"><strong>Totals</strong></td>
+          <td><strong>{{ ns.total_deposits }}</strong></td>
+          <td><strong>{{ ns.total_withdrawals }}</strong></td>
+          <td><strong>{{ ns.total_closing }}</strong></td>
+          <td></td>
+        </tr>
+
+      {% else %}
+        <!-- ❗ EMPTY STATE -->
+        <tr>
+          <td colspan="7" class="text-center text-muted">
+            No data available for selected period
+          </td>
+        </tr>
+      {% endif %}
+
+    </tbody>
+  </table>
 
   <!-- 📄 PAGINATION -->
   {% if pagination %}
