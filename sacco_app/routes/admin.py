@@ -2422,109 +2422,134 @@ def get_member_loan_info():
 @login_required
 def repay_loan_from_savings():
     """
-    Allows repayment of an active loan using funds from member's savings account.
-    Now includes Loan Control Account posting.
+    Repay loan using member savings.
+    Pays:
+    1. All interest (oldest first)
+    2. All principal (oldest first)
+    3. Future schedules if excess exists
     """
+
     from sacco_app.models import Member, Loan, LoanSchedule, SaccoAccount, Transaction
     from decimal import Decimal
     from datetime import datetime
     import uuid
 
-    if request.method == 'POST':
-        member_no = request.form.get('member_no').strip()
-        amount = Decimal(request.form.get('amount', '0'))
-        narration = request.form.get('narration') or "Loan repayment from savings"
-        txn_date = datetime.now()
+    # ✅ GET → show page only
+    if request.method == 'GET':
+        return render_template('admin/repay_loan_from_savings.html')
 
-        member = Member.query.filter_by(member_no=member_no).first()
-        if not member:
-            flash(f"Member {member_no} not found.", "danger")
-            return redirect(url_for('admin.repay_loan_from_savings'))
+    # 🔥 POST → process repayment
+    member_no = request.form.get('member_no', '').strip()
+    amount = Decimal(request.form.get('amount', '0'))
+    narration = request.form.get('narration') or "Loan repayment from savings"
+    txn_date = datetime.now()
 
-        savings_acc = SaccoAccount.query.filter_by(member_no=member_no, account_type='SAVINGS').first()
-        if not savings_acc:
-            flash("Member has no savings account.", "danger")
-            return redirect(url_for('admin.repay_loan_from_savings'))
+    if not member_no or amount <= 0:
+        flash("Invalid input.", "danger")
+        return redirect(url_for('admin.repay_loan_from_savings'))
 
-        if savings_acc.balance < amount:
-            flash("Insufficient savings balance.", "danger")
-            return redirect(url_for('admin.repay_loan_from_savings'))
+    member = Member.query.filter_by(member_no=member_no).first()
+    if not member:
+        flash(f"Member {member_no} not found.", "danger")
+        return redirect(url_for('admin.repay_loan_from_savings'))
 
-        loan = Loan.query.filter_by(member_no=member_no, status='Active').first()
-        if not loan:
-            flash("No active loan found for this member.", "danger")
-            return redirect(url_for('admin.repay_loan_from_savings'))
+    savings_acc = SaccoAccount.query.filter_by(member_no=member_no, account_type='SAVINGS').first()
+    if not savings_acc:
+        flash("Member has no savings account.", "danger")
+        return redirect(url_for('admin.repay_loan_from_savings'))
 
-        # --- Get GL Accounts
-        loan_principal_acc = SaccoAccount.query.filter_by(member_no=member_no,account_type='LOAN').first()
-        loan_control_acc = SaccoAccount.query.filter_by(account_number='M000GL_LOAN').first()
-        interest_control_acc = SaccoAccount.query.filter_by(account_number='M000GL_LN_INT').first()
-        interest_income_acc = SaccoAccount.query.filter_by(member_no=member_no,account_type='INTEREST').first()
+    if savings_acc.balance < amount:
+        flash("Insufficient savings balance.", "danger")
+        return redirect(url_for('admin.repay_loan_from_savings'))
 
-        savings_control_acc = SaccoAccount.query.filter_by(account_number='M000GL_SAVINGS').first()
+    loan = Loan.query.filter_by(member_no=member_no, status='Active').first()
+    if not loan:
+        flash("No active loan found.", "danger")
+        return redirect(url_for('admin.repay_loan_from_savings'))
 
-        if not all([loan_principal_acc, interest_income_acc, savings_control_acc, loan_control_acc]):
-            flash("Required GL accounts missing (Loan/Savings/Control).", "danger")
-            return redirect(url_for('admin.repay_loan_from_savings'))
+    # 🔥 GL Accounts
+    loan_principal_acc = SaccoAccount.query.filter_by(member_no=member_no, account_type='LOAN').first()
+    loan_control_acc = SaccoAccount.query.filter_by(account_number='M000GL_LOAN').first()
+    interest_control_acc = SaccoAccount.query.filter_by(account_number='M000GL_LN_INT').first()
+    interest_income_acc = SaccoAccount.query.filter_by(member_no=member_no, account_type='INTEREST').first()
+    savings_control_acc = SaccoAccount.query.filter_by(account_number='M000GL_SAVINGS').first()
 
-        due_schedule = LoanSchedule.query.filter(
-            LoanSchedule.loan_no == loan.loan_no,
-            LoanSchedule.status != 'PAID'
-        ).order_by(LoanSchedule.due_date).first()
+    if not all([loan_principal_acc, interest_income_acc, savings_control_acc, loan_control_acc]):
+        flash("Missing required GL accounts.", "danger")
+        return redirect(url_for('admin.repay_loan_from_savings'))
 
-        if not due_schedule:
-            flash("No due schedule found for repayment.", "warning")
-            return redirect(url_for('admin.repay_loan_from_savings'))
+    # 🔥 Get ALL unpaid schedules
+    schedules = LoanSchedule.query.filter(
+        LoanSchedule.loan_no == loan.loan_no,
+        LoanSchedule.status != 'PAID'
+    ).order_by(LoanSchedule.due_date).all()
 
-        remaining = amount
-        txn_ref = f"TXN{uuid.uuid4().hex[:10].upper()}"
-        transactions = []
+    if not schedules:
+        flash("No unpaid schedules found.", "warning")
+        return redirect(url_for('admin.repay_loan_from_savings'))
 
-        # 1️⃣ Deduct from member savings (Credit)
-        savings_acc.balance -= amount
-        txn_savings = Transaction(
-            txn_no=f"TXN{uuid.uuid4().hex[:10].upper()}",
-            member_no=member_no,
-            account_no=savings_acc.account_number,
-            gl_account='SAVINGS',
-            tran_type='LIABILITY',
-            debit_amount=amount,
-            credit_amount=Decimal('0'),
-            reference=txn_ref,
-            narration=f"Loan repayment from savings",
-            bank_txn_date=txn_date,
-            posted_by=current_user.username,
-            running_balance=savings_acc.balance
-        )
-        transactions.append(txn_savings)
+    remaining = amount
+    txn_ref = f"TXN{uuid.uuid4().hex[:10].upper()}"
+    transactions = []
 
-        # 2️⃣ Debit savings control (Dr)
-        savings_control_acc.balance -= amount
-        txn_ctrl = Transaction(
-            txn_no=f"TXN{uuid.uuid4().hex[:10].upper()}",
-            member_no='M000GL',
-            account_no=savings_control_acc.account_number,
-            gl_account='SAVINGS_CONTROL',
-            tran_type='LIABILITY',
-            debit_amount=Decimal('0'),
-            credit_amount=amount,
-            reference=txn_ref,
-            narration=f"Loan repayment (from savings) for {member_no}",
-            bank_txn_date=txn_date,
-            posted_by=current_user.username,
-            running_balance=savings_control_acc.balance
-        )
-        transactions.append(txn_ctrl)
+    # ===============================
+    # 1️⃣ Deduct savings
+    # ===============================
+    savings_acc.balance -= amount
 
-        # 3️⃣ Pay Interest (Credit Income)
-        interest_due = due_schedule.interest_due - due_schedule.interest_paid
-        if remaining > 0 and interest_due > 0:
+    transactions.append(Transaction(
+        txn_no=f"TXN{uuid.uuid4().hex[:10].upper()}",
+        member_no=member_no,
+        account_no=savings_acc.account_number,
+        gl_account='SAVINGS',
+        tran_type='LIABILITY',
+        debit_amount=amount,
+        credit_amount=Decimal('0'),
+        reference=txn_ref,
+        narration=narration,
+        bank_txn_date=txn_date,
+        posted_by=current_user.username,
+        running_balance=savings_acc.balance
+    ))
+
+    # Savings control
+    savings_control_acc.balance -= amount
+
+    transactions.append(Transaction(
+        txn_no=f"TXN{uuid.uuid4().hex[:10].upper()}",
+        member_no='M000GL',
+        account_no=savings_control_acc.account_number,
+        gl_account='SAVINGS_CONTROL',
+        tran_type='LIABILITY',
+        debit_amount=Decimal('0'),
+        credit_amount=amount,
+        reference=txn_ref,
+        narration=narration,
+        bank_txn_date=txn_date,
+        posted_by=current_user.username,
+        running_balance=savings_control_acc.balance
+    ))
+
+    # ===============================
+    # 🔥 LOOP ALL SCHEDULES
+    # ===============================
+    for sched in schedules:
+
+        if remaining <= 0:
+            break
+
+        # --- Interest first
+        interest_due = sched.interest_due - sched.interest_paid
+
+        if interest_due > 0:
             pay_interest = min(remaining, interest_due)
             remaining -= pay_interest
-            due_schedule.interest_paid += pay_interest
-            interest_income_acc.balance += pay_interest
+            sched.interest_paid += pay_interest
 
-            txn_int = Transaction(
+            interest_income_acc.balance += pay_interest
+            interest_control_acc.balance += pay_interest
+
+            transactions.append(Transaction(
                 txn_no=f"TXN{uuid.uuid4().hex[:10].upper()}",
                 member_no=member_no,
                 account_no=interest_income_acc.account_number,
@@ -2533,59 +2558,25 @@ def repay_loan_from_savings():
                 debit_amount=pay_interest,
                 credit_amount=Decimal('0'),
                 reference=txn_ref,
-                narration=f"Interest Paid - {member_no}",
+                narration="Interest repayment",
                 bank_txn_date=txn_date,
                 posted_by=current_user.username,
                 running_balance=interest_income_acc.balance
-            )
-            transactions.append(txn_int)
+            ))
 
-            interest_control_acc.balance += pay_interest
+        # --- Principal next
+        principal_due = sched.principal_due - sched.principal_paid
 
-            txn_int = Transaction(
-                txn_no=f"TXN{uuid.uuid4().hex[:10].upper()}",
-                member_no="M000GL",
-                account_no=interest_control_acc.account_number,
-                gl_account='LOAN_INTEREST_CONTROL',
-                tran_type='INCOME',
-                debit_amount=Decimal('0'),
-                credit_amount=pay_interest,
-                reference=txn_ref,
-                narration=f"Interest Paid - {member_no}",
-                bank_txn_date=txn_date,
-                posted_by=current_user.username,
-                running_balance=interest_control_acc.balance
-            )
-            transactions.append(txn_int)
-        # 4️⃣ Pay Principal (reduce loan & loan control)
-        principal_due = due_schedule.principal_due - due_schedule.principal_paid
-        if remaining > 0 and principal_due > 0:
+        if principal_due > 0 and remaining > 0:
             pay_principal = min(remaining, principal_due)
             remaining -= pay_principal
-            due_schedule.principal_paid += pay_principal
+            sched.principal_paid += pay_principal
+
             loan.balance -= pay_principal
             loan_principal_acc.balance -= pay_principal
-            loan_control_acc.balance -= pay_principal  # <-- NEW POSTING HERE
+            loan_control_acc.balance -= pay_principal
 
-            # a) Credit Loan Control
-            txn_ctrl_credit = Transaction(
-                txn_no=f"TXN{uuid.uuid4().hex[:10].upper()}",
-                member_no='M000GL',
-                account_no=loan_control_acc.account_number,
-                gl_account='LOAN_CONTROL',
-                tran_type='ASSET',
-                debit_amount=Decimal('0'),
-                credit_amount=pay_principal,
-                reference=txn_ref,
-                narration=f"Loan principal repayment from savings- {member_no}",
-                bank_txn_date=txn_date,
-                posted_by=current_user.username,
-                running_balance=loan_control_acc.balance
-            )
-            transactions.append(txn_ctrl_credit)
-
-            # b) Debit Loan GL
-            txn_principal = Transaction(
+            transactions.append(Transaction(
                 txn_no=f"TXN{uuid.uuid4().hex[:10].upper()}",
                 member_no=member_no,
                 account_no=loan_principal_acc.account_number,
@@ -2594,25 +2585,24 @@ def repay_loan_from_savings():
                 debit_amount=pay_principal,
                 credit_amount=Decimal('0'),
                 reference=txn_ref,
-                narration=f"Principal paid for {member_no}",
+                narration="Principal repayment",
                 bank_txn_date=txn_date,
                 posted_by=current_user.username,
                 running_balance=loan_principal_acc.balance
-            )
-            transactions.append(txn_principal)
+            ))
 
-        # 5️⃣ Mark schedule as PAID if fully settled
-        if (due_schedule.principal_paid >= due_schedule.principal_due) and (due_schedule.interest_paid >= due_schedule.interest_due):
-            due_schedule.status = 'PAID'
+        # --- Mark schedule paid
+        if sched.principal_paid >= sched.principal_due and sched.interest_paid >= sched.interest_due:
+            sched.status = 'PAID'
 
-        db.session.add_all(transactions)
-        db.session.commit()
+    # ===============================
+    # 🔥 SAVE
+    # ===============================
+    db.session.add_all(transactions)
+    db.session.commit()
 
-        flash(f"Loan repayment of KSh {amount} from savings posted successfully.", "success")
-        return redirect(url_for('admin.repay_loan_from_savings'))
-
-    return render_template('admin/repay_loan_from_savings.html')
-
+    flash(f"Loan repayment of KSh {amount} processed successfully.", "success")
+    return redirect(url_for('admin.repay_loan_from_savings'))
 @admin_bp.route('/transactions/reverse', methods=['GET', 'POST'])
 @login_required
 def reverse_transaction():
