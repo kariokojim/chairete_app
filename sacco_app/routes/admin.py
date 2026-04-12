@@ -4864,7 +4864,8 @@ def export_monthly_balances():
     from flask import send_file
 
     result = db.session.execute(text("""
-        SELECT *
+        SELECT member_no, month,year,opening_balance_savings,opening_balance_loan,deposits,loan_paid, interest_paid,
+        deposits+loan_paid+interest_paid as banked_total, closing_balance_savings,closing_balance_loan
         FROM member_monthly_balances
         WHERE year = :year AND month = :month
         ORDER BY member_no
