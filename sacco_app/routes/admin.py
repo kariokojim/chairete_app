@@ -3,8 +3,8 @@ from flask import Blueprint, render_template, redirect, url_for, flash, request,
 from flask_login import login_required,current_user
 from datetime import datetime, timedelta
 from sacco_app.extensions import db,csrf
-from sacco_app.models import User,Member,generate_account_number,SaccoAccount,Transaction, Loan,LoanGuarantor, LoanSchedule, LoanInterest,AuditLog
-from sacco_app.forms import UserForm,AddMemberForm,LoanRepaymentForm,OpenAccountForm,PaymentPostingForm,LoanDisbursementForm,GuarantorForm,MemberDepositSearchForm
+from sacco_app.models import CreditCommitteeMember,User,Member,generate_account_number,SaccoAccount,Transaction, Loan,LoanGuarantor, LoanSchedule, LoanInterest,AuditLog,CreditCommitteeApproval,LoanApplication
+from sacco_app.forms import CommitteeMemberForm,LoanApplicationForm,UserForm,AddMemberForm,LoanRepaymentForm,OpenAccountForm,PaymentPostingForm,LoanDisbursementForm,GuarantorForm,MemberDepositSearchForm
 from werkzeug.security import generate_password_hash
 from sacco_app.utils.transactions import post_savings
 from decimal import Decimal
@@ -28,7 +28,7 @@ from sacco_app.utils.receipt_utils import generate_receipt_no
 from sacco_app.utils.loan_email_utils import send_loan_schedule_email
 from sacco_app.utils.async_tasks import run_async
 from sacco_app.utils.receipt_tasks import send_receipt_background
-
+from sacco_app.utils.sms import send_sms
 
 
 
@@ -2533,14 +2533,26 @@ def repay_loan_from_savings():
     # ===============================
     # 🔥 LOOP ALL SCHEDULES
     # ===============================
+    
+
+            # ------------------------------------------
+            # PAY INTEREST FIRST
+            # ------------------------------------------
+
+    today = date.today()
     for sched in schedules:
 
         if remaining <= 0:
             break
 
         # --- Interest first
-        interest_due = sched.interest_due - sched.interest_paid
+        interest_due = Decimal('0')
 
+        if sched.due_date and sched.due_date <= today:
+            interest_due = (
+                Decimal(sched.interest_due)
+                - Decimal(sched.interest_paid)
+            )
         if interest_due > 0:
             pay_interest = min(remaining, interest_due)
             remaining -= pay_interest
@@ -2551,9 +2563,9 @@ def repay_loan_from_savings():
 
             transactions.append(Transaction(
                 txn_no=f"TXN{uuid.uuid4().hex[:10].upper()}",
-                member_no=member_no,
-                account_no=interest_income_acc.account_number,
-                gl_account='MEMBER_INTEREST',
+                member_no='M000GL',
+                account_no=interest_control_acc.account_number,
+                gl_account='LOAN_INTEREST_CONTROL',
                 tran_type='INCOME',
                 debit_amount=pay_interest,
                 credit_amount=Decimal('0'),
@@ -2561,8 +2573,9 @@ def repay_loan_from_savings():
                 narration="Interest repayment",
                 bank_txn_date=txn_date,
                 posted_by=current_user.username,
-                running_balance=interest_income_acc.balance
+                running_balance=interest_control_acc.balance
             ))
+
 
         # --- Principal next
         principal_due = sched.principal_due - sched.principal_paid
@@ -2590,6 +2603,7 @@ def repay_loan_from_savings():
                 posted_by=current_user.username,
                 running_balance=loan_principal_acc.balance
             ))
+                                   
 
         # --- Mark schedule paid
         if sched.principal_paid >= sched.principal_due and sched.interest_paid >= sched.interest_due:
@@ -2603,6 +2617,343 @@ def repay_loan_from_savings():
 
     flash(f"Loan repayment of KSh {amount} processed successfully.", "success")
     return redirect(url_for('admin.repay_loan_from_savings'))
+    
+##pay loan from guarantor
+@admin_bp.route('/loans/repay_from_guarantor_savings', methods=['GET', 'POST'])
+@login_required
+def repay_from_guarantor_savings():
+    """
+    Recover a defaulter loan using guarantor savings.
+
+    Payment order:
+    1. Oldest unpaid interest first
+    2. Oldest unpaid principal next
+    3. Marks schedules PAID when fully cleared
+    """
+
+    from sacco_app import db
+    from sacco_app.models import (
+        Member,
+        Loan,
+        LoanSchedule,
+        SaccoAccount,
+        Transaction,
+        LoanGuarantor
+    )
+
+    from decimal import Decimal, InvalidOperation
+    from datetime import datetime
+    import uuid
+
+    if request.method == 'GET':
+        return render_template('admin/repay_from_guarantor.html')
+
+    # ==================================================
+    # RECEIVE FORM DATA
+    # ==================================================
+    defaulter_no = (request.form.get('member_no') or '').strip()
+    guarantor_no = (request.form.get('guarantor_no') or '').strip()
+    narration = (
+        request.form.get('narration')
+        or f"Loan recovery from guarantor {guarantor_no}"
+    )
+
+    try:
+        amount = Decimal(request.form.get('amount', '0'))
+    except InvalidOperation:
+        amount = Decimal('0')
+
+    if not defaulter_no or not guarantor_no or amount <= 0:
+        flash("Invalid input supplied.", "danger")
+        return redirect(request.url)
+
+    # ==================================================
+    # VALIDATE LOAN DEFAULTER
+    # ==================================================
+    defaulter = Member.query.filter_by(member_no=defaulter_no).first()
+
+    if not defaulter:
+        flash("Defaulter member not found.", "danger")
+        return redirect(request.url)
+
+    loan = Loan.query.filter_by(
+        member_no=defaulter_no,
+        status='Active'
+    ).first()
+
+    if not loan:
+        flash("No active loan found for this member.", "danger")
+        return redirect(request.url)
+
+    # ==================================================
+    # VALIDATE GUARANTOR
+    # ==================================================
+    guarantor = Member.query.filter_by(member_no=guarantor_no).first()
+
+    if not guarantor:
+        flash("Guarantor member not found.", "danger")
+        return redirect(request.url)
+
+    guarantee = LoanGuarantor.query.filter_by(
+        loan_no=loan.loan_no,
+        guarantor_no=guarantor_no
+    ).first()
+
+    if not guarantee:
+        flash("Selected member is not a guarantor for this loan.", "danger")
+        return redirect(request.url)
+
+    # ==================================================
+    # GET REQUIRED ACCOUNTS
+    # ==================================================
+
+    # Guarantor savings account
+    guarantor_savings = SaccoAccount.query.filter_by(
+        member_no=guarantor_no,
+        account_type='SAVINGS'
+    ).first()
+
+    # Savings control GL
+    savings_control = SaccoAccount.query.filter_by(
+        account_number='M000GL_SAVINGS'
+    ).first()
+
+    # Defaulter loan account
+    loan_principal_acc = SaccoAccount.query.filter_by(
+        member_no=defaulter_no,
+        account_type='LOAN'
+    ).first()
+
+    # Loan control GL
+    loan_control = SaccoAccount.query.filter_by(
+        account_number='M000GL_LOAN'
+    ).first()
+
+    # Member interest account
+    interest_income_acc = SaccoAccount.query.filter_by(
+        member_no=defaulter_no,
+        account_type='INTEREST'
+    ).first()
+
+    # Interest control GL
+    interest_control = SaccoAccount.query.filter_by(
+        account_number='M000GL_LN_INT'
+    ).first()
+
+    if not guarantor_savings:
+        flash("Guarantor has no savings account.", "danger")
+        return redirect(request.url)
+
+    if guarantor_savings.balance < amount:
+        flash("Insufficient guarantor savings balance.", "danger")
+        return redirect(request.url)
+
+    if not all([
+        savings_control,
+        loan_principal_acc,
+        loan_control,
+        interest_income_acc,
+        interest_control
+    ]):
+        flash("Missing one or more required GL accounts.", "danger")
+        return redirect(request.url)
+
+    # ==================================================
+    # GET UNPAID SCHEDULES
+    # ==================================================
+    schedules = LoanSchedule.query.filter(
+        LoanSchedule.loan_no == loan.loan_no,
+        LoanSchedule.status != 'PAID'
+    ).order_by(LoanSchedule.due_date).all()
+
+    if not schedules:
+        flash("No unpaid schedules found.", "warning")
+        return redirect(request.url)
+
+    # ==================================================
+    # START PROCESSING
+    # ==================================================
+    txn_ref = f"TXN{uuid.uuid4().hex[:10].upper()}"
+    txn_date = datetime.now()
+    transactions = []
+    remaining = amount
+
+    try:
+
+        # ==============================================
+        # 1. DEDUCT GUARANTOR SAVINGS
+        # ==============================================
+        guarantor_savings.balance -= amount
+
+        transactions.append(Transaction(
+            txn_no=f"TXN{uuid.uuid4().hex[:10].upper()}",
+            member_no=guarantor_no,
+            account_no=guarantor_savings.account_number,
+            gl_account='SAVINGS',
+            tran_type='LIABILITY',
+            debit_amount=amount,
+            credit_amount=Decimal('0'),
+            reference=txn_ref,
+            narration=f"Loan recovery for {defaulter_no}",
+            bank_txn_date=txn_date,
+            posted_by=current_user.username,
+            running_balance=guarantor_savings.balance
+        ))
+
+        # ==============================================
+        # 2. SAVINGS CONTROL
+        # ==============================================
+        savings_control.balance -= amount
+
+        transactions.append(Transaction(
+            txn_no=f"TXN{uuid.uuid4().hex[:10].upper()}",
+            member_no='M000GL',
+            account_no=savings_control.account_number,
+            gl_account='SAVINGS_CONTROL',
+            tran_type='LIABILITY',
+            debit_amount=Decimal('0'),
+            credit_amount=amount,
+            reference=txn_ref,
+            narration=f"Guarantor loan recovery {guarantor_no}",
+            bank_txn_date=txn_date,
+            posted_by=current_user.username,
+            running_balance=savings_control.balance
+        ))
+
+        # ==============================================
+        # 3. APPLY TO LOAN SCHEDULES
+        # ==============================================
+        today = date.today()
+
+        for sched in schedules:
+
+            if remaining <= 0:
+                break
+
+            # ------------------------------------------
+            # PAY INTEREST FIRST
+            # ------------------------------------------
+            interest_due = Decimal('0')
+
+            if sched.due_date and sched.due_date <= today:
+                interest_due = (
+                    Decimal(sched.interest_due)
+                    - Decimal(sched.interest_paid)
+                )
+
+            if interest_due > 0 and remaining > 0:
+
+                pay_interest = min(remaining, interest_due)
+
+                sched.interest_paid += pay_interest
+                remaining -= pay_interest
+                interest_control.balance += amount
+
+                transactions.append(Transaction(
+                    txn_no=f"TXN{uuid.uuid4().hex[:10].upper()}",
+                    member_no='M000GL',
+                    account_no=interest_control.account_number,
+                    gl_account='LOAN_INTEREST_CONTROL',
+                    tran_type='INCOME',
+                    debit_amount=Decimal('0'),
+                    credit_amount=pay_interest,
+                    reference=txn_ref,
+                    narration=f"Interest paid by guarantor{guarantor_no}",
+                    bank_txn_date=txn_date,
+                    posted_by=current_user.username,
+                    running_balance=interest_control.balance
+                ))
+
+            # ------------------------------------------
+            # PAY PRINCIPAL NEXT
+            # ------------------------------------------
+            principal_due = (
+                Decimal(sched.principal_due)
+                - Decimal(sched.principal_paid)
+            )
+
+            if principal_due > 0 and remaining > 0:
+
+                pay_principal = min(remaining, principal_due)
+
+                sched.principal_paid += pay_principal
+                remaining -= pay_principal
+
+                loan.balance -= pay_principal
+                loan_principal_acc.balance -= pay_principal
+
+                transactions.append(Transaction(
+                    txn_no=f"TXN{uuid.uuid4().hex[:10].upper()}",
+                    member_no=defaulter_no,
+                    account_no=loan_principal_acc.account_number,
+                    gl_account='MEMBER_LOAN',
+                    tran_type='ASSET',
+                    debit_amount=pay_principal,
+                    credit_amount=Decimal('0'),
+                    reference=txn_ref,
+                    narration=f"Principal paid by guarantor{guarantor_no}",
+                    bank_txn_date=txn_date,
+                    posted_by=current_user.username,
+                    running_balance=loan_principal_acc.balance
+                ))
+
+
+            # LOAN control
+            loan_control.balance -= pay_principal
+
+            transactions.append(Transaction(
+                txn_no=f"TXN{uuid.uuid4().hex[:10].upper()}",
+                member_no='M000GL',
+                account_no=loan_control.account_number,
+                gl_account='LOAN_CONTROL',
+                tran_type='ASSET',
+                debit_amount=Decimal('0'),
+                credit_amount=pay_principal,
+                reference=txn_ref,
+                narration=f"Principal paid by guarantor{guarantor_no}",
+                bank_txn_date=txn_date,
+                posted_by=current_user.username,
+                running_balance=loan_control.balance
+            ))
+
+
+            # ------------------------------------------
+            # MARK SCHEDULE PAID
+            # ------------------------------------------
+            if (
+                Decimal(sched.principal_paid) >= Decimal(sched.principal_due)
+                and
+                Decimal(sched.interest_paid) >= Decimal(sched.interest_due)
+            ):
+                sched.status = 'PAID'
+
+        # ==============================================
+        # CLOSE LOAN IF FULLY CLEARED
+        # ==============================================
+        if loan.balance <= 0:
+            loan.balance = Decimal('0')
+            loan.status = 'PAID'
+
+        # ==============================================
+        # SAVE ALL
+        # ==============================================
+        db.session.add_all(transactions)
+        db.session.commit()
+
+        recovered = amount - remaining
+
+        flash(
+            f"KSh {recovered:,.2f} recovered from guarantor savings successfully.",
+            "success"
+        )
+
+    except Exception as e:
+        db.session.rollback()
+        flash(f"Processing failed: {str(e)}", "danger")
+
+    return redirect(request.url)
+
+
 @admin_bp.route('/transactions/reverse', methods=['GET', 'POST'])
 @login_required
 def reverse_transaction():
@@ -4294,12 +4645,6 @@ def lookup_member(member_no):
         return {"found": False}
     return {"found": True, "name": member.name}
 
-#sending sms POSTINGS
-@admin_bp.route("/test-sms")
-def test_sms():
-    from sacco_app.utils.sms import send_sms
-    send_sms("+254721313527", "Hello from Chairete SACCO 🚀")
-    return "SMS sent"
 
 #charging membership fee
 
@@ -4864,9 +5209,10 @@ def export_monthly_balances():
     from flask import send_file
 
     result = db.session.execute(text("""
+        
         SELECT member_no, month,year,opening_balance_savings,opening_balance_loan,deposits,loan_paid, interest_paid,
-        deposits+loan_paid+interest_paid as banked_total, closing_balance_savings,closing_balance_loan
-        FROM member_monthly_balances
+        deposits+loan_paid+interest_paid as banked_total, closing_balance_savings,closing_balance_loan   FROM member_monthly_balances
+       
         WHERE year = :year AND month = :month
         ORDER BY member_no
     """), {"year": year, "month": month})
@@ -5233,3 +5579,812 @@ def adjust_loan():
         import traceback; traceback.print_exc()
         flash(f"Loan adjustment failed: {str(e)}", "danger")
         return redirect(request.referrer)
+        
+        
+## loan application by member
+from flask import request, render_template, redirect, url_for, flash
+from decimal import Decimal
+import uuid
+
+@admin_bp.route('/apply-loan', methods=['GET', 'POST'])
+@login_required
+def apply_loan_page():
+    form = LoanApplicationForm()
+
+    # =========================
+    # HANDLE POST ONLY
+    # =========================
+    if request.method == 'POST':
+        print("LOAN SUBMIT HIT")
+        member_no = form.member_no.data
+        amount = Decimal(form.loan_amount.data or 0)
+        period = form.loan_period.data
+
+        # =========================
+        # GET MEMBER SAVINGS
+        # =========================
+        savings_acc = SaccoAccount.query.filter_by(
+            member_no=member_no,
+            account_type='SAVINGS'
+        ).first()
+
+        savings_balance = Decimal(savings_acc.balance if savings_acc else 0)
+
+        # =========================
+        # VALIDATIONS
+        # =========================
+        if amount <= 0:
+            flash("Loan amount is required", "danger")
+            return redirect(url_for('admin.apply_loan_page'))
+
+        if amount > (savings_balance * 3):
+            flash("Loan exceeds 3 times member savings", "danger")
+            return redirect(url_for('admin.apply_loan_page'))
+
+        # =========================
+        # COLLECT GUARANTORS
+        # =========================
+        guarantors_data = []
+        total_guarantee = Decimal(0)
+
+        for key in request.form:
+            if "guarantors-" in key and "-member_no" in key:
+                index = key.split("-")[1]
+
+                g_member_no = request.form.get(f"guarantors-{index}-member_no")
+                g_amount = request.form.get(f"guarantors-{index}-amount_guaranteed")
+
+                if g_member_no and g_amount:
+                    amt = Decimal(g_amount)
+
+                    guarantors_data.append({
+                        "member_no": g_member_no,
+                        "amount_guaranteed": amt
+                    })
+
+                    total_guarantee += amt
+
+        if total_guarantee < amount:
+            flash("Total guarantee must cover loan amount", "danger")
+            return redirect(url_for('admin.apply_loan_page'))
+
+        # =========================
+        # SAVE LOAN APPLICATION
+        # =========================
+        loan_app = LoanApplication(
+            member_no=member_no,
+            amount=amount,
+            period=period,
+            status='PENDING_GUARANTORS'
+        )
+
+        db.session.add(loan_app)
+        db.session.flush()
+
+        # =========================
+        # SAVE GUARANTORS + LINKS
+        # =========================
+        for g in guarantors_data:
+            guarantor = LoanGuarantor(
+                guarantor_no=g['member_no'],
+                member_no=member_no,
+                application_id=loan_app.id,
+                amount_guaranteed=g['amount_guaranteed'],
+                token=str(uuid.uuid4())
+            )
+
+            db.session.add(guarantor)
+            db.session.flush()
+
+            approval_link = url_for('admin.approve_guarantor', token=guarantor.token,
+            _external=True)
+
+            guarantor_member = Member.query.filter_by( member_no=g['member_no']).first()
+
+            if guarantor_member and guarantor_member.phone:
+                send_sms(
+                    guarantor_member.phone,
+                    f"CHAIRETE SACCO: You have been requested to guarantee KES {g['amount_guaranteed']}. Click link to Approve: {approval_link}"
+                )
+        db.session.commit()
+        member = Member.query.filter_by(member_no=member_no).first()
+        if member and member.phone:
+            send_sms(
+            member.phone,
+            f"Your loan application of KES {amount} has been received and sent to guarantors."
+            )
+
+        return redirect(url_for('admin.apply_loan_page'))
+
+    # =========================
+    # GET REQUEST
+    # =========================
+    return render_template('admin/loan_application.html', form=form)
+from sacco_app.models import Member
+
+from flask import request, render_template, session, redirect, url_for, flash
+from datetime import datetime
+import uuid
+
+
+@admin_bp.route('/guarantor/approve/<token>', methods=['GET', 'POST'])
+def approve_guarantor(token):
+
+    guarantor = LoanGuarantor.query.filter_by(token=token).first_or_404()
+    loan_app = LoanApplication.query.get_or_404(guarantor.application_id)
+
+    applicant = Member.query.filter_by(
+        member_no=loan_app.member_no
+    ).first()
+
+    guarantor_member = Member.query.filter_by(
+        member_no=guarantor.guarantor_no
+    ).first()
+
+    # =====================================================
+    # STEP 1: VERIFY MEMBER NUMBER BEFORE APPROVAL PAGE
+    # =====================================================
+    verified_key = f"guarantor_verified_{token}"
+
+    if not session.get(verified_key):
+
+        if request.method == 'POST':
+
+            entered_no = request.form.get("member_no", "").strip().upper()
+
+            if entered_no != guarantor.guarantor_no.upper():
+                flash("Wrong member number.", "danger")
+
+            else:
+                import random
+
+                otp = str(random.randint(10000, 99999))
+
+                session[f"otp_{token}"] = otp
+                session[f"member_ok_{token}"] = True
+                # -----------------------------------
+                # SEND OTP TO GUARANTOR PHONE
+                # -----------------------------------
+                if guarantor_member and guarantor_member.phone:
+
+                    result = send_sms(
+                        guarantor_member.phone,
+                        f"CHAIRETE SACCO OTP TO ACCEPT GUARANTOR: {otp}"
+                    )
+
+
+                print("OTP:", otp)   # testing for now
+
+                flash("OTP sent to your registered phone.", "success")
+
+                return redirect(
+                    url_for(
+                        'admin.verify_guarantor_otp',
+                        token=token
+                    )
+                )
+
+        return render_template(
+            'admin/guarantor_verify.html',
+            guarantor=guarantor,
+            applicant=applicant,
+            loan_app=loan_app
+        )
+
+    # =====================================================
+    # STEP 2: APPROVE / REJECT PAGE
+    # =====================================================
+    if request.method == 'POST':
+
+        action = request.form.get('action')
+
+        # prevent repeat response
+        if guarantor.approved or guarantor.rejected:
+            return "You already responded."
+
+        # ------------------------
+        # APPROVE / REJECT
+        # ------------------------
+        if action == 'approve':
+            guarantor.approved = True
+            guarantor.approved_at = datetime.utcnow()
+
+        elif action == 'reject':
+            guarantor.rejected = True
+            loan_app.status = "REJECTED"
+            db.session.commit()
+
+            return render_template(
+                'admin/guarantor_done.html',
+                message="Loan request rejected successfully.",
+                status="danger"
+            )
+
+        db.session.commit()
+
+        # ------------------------
+        # CHECK ALL GUARANTORS
+        # ------------------------
+        total = LoanGuarantor.query.filter_by(
+            application_id=loan_app.id
+        ).count()
+
+        approved = LoanGuarantor.query.filter_by(
+            application_id=loan_app.id,
+            approved=True
+        ).count()
+
+        print("TOTAL:", total)
+        print("APPROVED:", approved)
+
+        # ------------------------
+        # MOVE TO COMMITTEE
+        # ------------------------
+        # =====================================================
+        # AFTER ALL GUARANTORS APPROVE
+        # MOVE APPLICATION TO COMMITTEE
+        # =====================================================
+
+        if approved == total and total > 0:
+
+            print("ALL GUARANTORS APPROVED")
+
+            # ---------------------------------
+            # UPDATE LOAN STATUS
+            # ---------------------------------
+            loan_app.status = "PENDING_CREDIT_COMMITTEE"
+            db.session.commit()
+
+            # ---------------------------------
+            # PREVENT DUPLICATE COMMITTEE LINKS
+            # ---------------------------------
+            existing = CreditCommitteeApproval.query.filter_by(
+                application_id=loan_app.id
+            ).count()
+
+            if existing == 0:
+
+                # ---------------------------------
+                # GET ACTIVE COMMITTEE MEMBERS
+                # ---------------------------------
+                committee_members = CreditCommitteeMember.query.filter_by(
+                    status="ACTIVE"  ).all()
+                print("ACTIVE COMMITTEE COUNT:", len(committee_members))
+
+                for cm in committee_members:
+
+                    # create approval record
+                    rec = CreditCommitteeApproval(
+                        application_id=loan_app.id,
+                        approver_member_no=cm.member_no,
+                        approver_name=cm.name,
+                        approver_role=cm.role,
+                        token=str(uuid.uuid4()),
+                        approved=False
+                    )
+
+                    db.session.add(rec)
+                    db.session.flush()
+
+                    # ---------------------------------
+                    # GENERATE UNIQUE APPROVAL LINK
+                    # ---------------------------------
+                    link = url_for(
+                        'admin.committee_approve',
+                        token=rec.token,
+                        _external=True
+                    )
+
+                    # ---------------------------------
+                    # SEND SMS TO COMMITTEE MEMBER
+                    # ---------------------------------
+                    committee_user = Member.query.filter_by(
+                        member_no=cm.member_no  ).first()
+                    print("COMMITTEE:", cm.member_no)
+
+
+                    if committee_user and committee_user.phone:
+
+                        result = send_sms(
+                            committee_user.phone,
+                            f"CHAIRETE SACCO: Loan approval request. "
+                            f"Role: {cm.role}. "
+                            f"Open link: {link}"
+                        )
+                        
+                        print("COMMITTEE SMS:", result)
+                    else:
+                        
+                        print("NO PHONE FOUND")
+                db.session.commit()
+
+        return render_template(
+            'admin/guarantor_done.html',
+            message="Your response has been recorded successfully.",
+            status="success"
+        )
+
+    # =====================================================
+    # STEP 3: SHOW APPROVAL PAGE
+    # =====================================================
+    return render_template(
+        'admin/guarantor_approval.html',
+        guarantor=guarantor,
+        loan_app=loan_app,
+        applicant=applicant,
+        guarantor_member=guarantor_member
+    )
+    
+## OTP SENDING
+@admin_bp.route('/guarantor/otp/<token>', methods=['GET', 'POST'])
+def verify_guarantor_otp(token):
+
+    if not session.get(f"member_ok_{token}"):
+        return redirect(url_for('admin.approve_guarantor', token=token))
+
+    if request.method == 'POST':
+
+        entered = request.form.get("otp", "").strip()
+
+        if entered == session.get(f"otp_{token}"):
+
+            session[f"guarantor_verified_{token}"] = True
+
+            session.pop(f"otp_{token}", None)
+
+            flash("OTP verified successfully.", "success")
+
+            return redirect(
+                url_for(
+                    'admin.approve_guarantor',
+                    token=token
+                )
+            )
+
+        flash("Invalid OTP.", "danger")
+
+    return render_template(
+        'admin/guarantor_otp.html'
+    )
+
+@admin_bp.route('/committee/approve/<token>', methods=['GET', 'POST'])
+def committee_approve(token):
+
+    # ==================================================
+    # LOAD RECORDS
+    # ==================================================
+    approval = CreditCommitteeApproval.query.filter_by(
+        token=token
+    ).first_or_404()
+
+    loan_app = LoanApplication.query.get_or_404(
+        approval.application_id
+    )
+
+    committee_member = Member.query.filter_by(
+        member_no=approval.approver_member_no
+    ).first()
+
+    verified_key = f"committee_verified_{token}"
+    otp_key = f"committee_otp_{token}"
+
+    # ==================================================
+    # STEP 1: VERIFY MEMBER NUMBER + SEND OTP
+    # ==================================================
+    if not session.get(verified_key):
+
+        if request.method == 'POST':
+
+            entered_no = request.form.get(
+                'member_no', ''
+            ).strip().upper()
+
+            if entered_no != approval.approver_member_no:
+                flash("Wrong member number.", "danger")
+
+            else:
+                import random
+
+                otp = str(random.randint(10000, 99999))
+
+                session[otp_key] = otp
+                session[f"committee_ok_{token}"] = True
+
+                if committee_member and committee_member.phone:
+
+                    result = send_sms(
+                        committee_member.phone,
+                        f"CHAIRETE SACCO OTP: {otp}"
+                    )
+
+                    print("COMMITTEE OTP:", result)
+
+                flash("OTP sent to your phone.", "success")
+
+                return redirect(
+                    url_for(
+                        'admin.committee_otp',
+                        token=token
+                    )
+                )
+
+        return render_template(
+            'admin/committee_verify.html',
+            approval=approval,
+            loan_app=loan_app
+        )
+
+    # ==================================================
+    # STEP 2: HANDLE APPROVE / REJECT
+    # ==================================================
+    if request.method == 'POST':
+
+        action = request.form.get('action')
+
+        if approval.approved:
+            return "You already approved."
+
+        if action == 'approve':
+
+            approval.approved = True
+            approval.approved_at = datetime.utcnow()
+
+        elif action == 'reject':
+
+            loan_app.status = "REJECTED"
+
+        db.session.commit()
+
+        # ----------------------------------------------
+        # CHECK IF ALL COMMITTEE APPROVED
+        # ----------------------------------------------
+        total = CreditCommitteeApproval.query.filter_by(
+            application_id=loan_app.id
+        ).count()
+
+        approved = CreditCommitteeApproval.query.filter_by(
+            application_id=loan_app.id,
+            approved=True
+        ).count()
+
+        if approved == total and total > 0:
+
+            loan_app.status = "APPROVED"
+
+            member = Member.query.filter_by(
+                member_no=loan_app.member_no
+            ).first()
+
+            if member and member.phone:
+
+                send_sms(
+                    member.phone,
+                    "Your loan has been approved and is awaiting disbursement."
+                )
+
+            db.session.commit()
+
+        return render_template(
+            'admin/committee_done.html',
+            message="Committee decision recorded successfully.",
+            status="success"
+        )
+
+    # ==================================================
+    # STEP 3: PAGE DATA
+    # ==================================================
+
+    applicant = Member.query.filter_by(
+        member_no=loan_app.member_no
+    ).first()
+
+    # ----------------------------------------------
+    # SAVINGS
+    # ----------------------------------------------
+    savings_acc = SaccoAccount.query.filter_by(
+        member_no=loan_app.member_no,
+        account_type='SAVINGS'
+    ).first()
+
+    applicant_savings = float(
+        savings_acc.balance
+    ) if savings_acc else 0
+
+    # ----------------------------------------------
+    # GUARANTORS
+    # ----------------------------------------------
+    guarantor_rows = []
+
+    rows = LoanGuarantor.query.filter_by(
+        application_id=loan_app.id
+    ).all()
+
+    for g in rows:
+
+        gm = Member.query.filter_by(
+            member_no=g.guarantor_no
+        ).first()
+
+        g_acc = SaccoAccount.query.filter_by(
+            member_no=g.guarantor_no,
+            account_type='SAVINGS'
+        ).first()
+
+        guarantor_rows.append({
+            "guarantor_no": g.guarantor_no,
+            "name": gm.name if gm else g.guarantor_no,
+            "savings": float(g_acc.balance) if g_acc else 0,
+            "amount_guaranteed": float(g.amount_guaranteed),
+            "approved": g.approved,
+            "rejected": g.rejected
+        })
+
+    # ==================================================
+    # SCORING
+    # ==================================================
+    requested = float(loan_app.amount)
+    deposits = float(applicant_savings)
+
+    active_loans = Loan.query.filter_by(
+        member_no=loan_app.member_no,
+        status='Active'
+    ).all()
+
+    existing_debt = sum(float(l.balance) for l in active_loans)
+
+    debt_ratio = round(
+        (existing_debt / deposits) * 100, 2
+    ) if deposits > 0 else 100
+
+    score = 0
+
+    # deposits
+    if deposits >= requested:
+        score += 40
+    elif deposits >= requested * 0.5:
+        score += 25
+    else:
+        score += 10
+
+    # guarantees
+    total_guaranteed = sum(
+        float(g["amount_guaranteed"])
+        for g in guarantor_rows
+    )
+
+    if total_guaranteed >= requested:
+        score += 30
+    elif total_guaranteed >= requested * 0.75:
+        score += 20
+    else:
+        score += 10
+
+    # debt ratio
+    if debt_ratio < 30:
+        score += 20
+    elif debt_ratio < 60:
+        score += 10
+
+    # period
+    if loan_app.period <= 24:
+        score += 10
+    else:
+        score += 5
+
+    # risk flag
+    if score >= 80:
+        risk_flag = "GREEN"
+    elif score >= 60:
+        risk_flag = "AMBER"
+    else:
+        risk_flag = "RED"
+
+    # ==================================================
+    # SHOW APPROVAL PAGE
+    # ==================================================
+    return render_template(
+        'admin/committee_approval.html',
+        loan_app=loan_app,
+        approval=approval,
+        applicant=applicant,
+        applicant_savings=applicant_savings,
+        guarantors=guarantor_rows,
+        debt_ratio=debt_ratio,
+        score=score,
+        risk_flag=risk_flag
+    )
+
+## coomittee approval OTP
+
+@admin_bp.route('/committee/otp/<token>', methods=['GET', 'POST'])
+def committee_otp(token):
+
+    if not session.get(f"committee_ok_{token}"):
+        return redirect(url_for('admin.committee_approve', token=token))
+
+    if request.method == 'POST':
+
+        entered = request.form.get("otp", "").strip()
+
+        if entered == session.get(f"committee_otp_{token}"):
+
+            session[f"committee_verified_{token}"] = True
+
+            flash("OTP verified.", "success")
+
+            return redirect(
+                url_for(
+                    'admin.committee_approve',
+                    token=token
+                )
+            )
+
+        flash("Invalid OTP.", "danger")
+
+    return render_template(
+        'admin/committee_otp.html'
+    )
+##generate loan bisbursment
+
+def process_loan_disbursement(member_no, loan_amount, loan_period, loan_type, guarantors, user):
+
+    # ---------------- MEMBER ----------------
+    member = Member.query.filter_by(member_no=member_no).first()
+    if not member:
+        raise Exception("Member not found")
+
+    savings_acc = SaccoAccount.query.filter_by(
+        member_no=member_no,
+        account_type='SAVINGS'
+    ).first()
+
+    if loan_amount > (savings_acc.balance * 3):
+        raise Exception("Loan exceeds 3× savings")
+
+    # ---------------- LOAN NUMBER ----------------
+    last_loan = Loan.query.order_by(Loan.id.desc()).first()
+    loan_no = f"LN{(last_loan.id + 1) if last_loan else 1:04d}"
+
+    # ---------------- CREATE LOAN ----------------
+    loan = Loan(
+        loan_no=loan_no,
+        member_no=member_no,
+        loan_amount=loan_amount,
+        loan_period=loan_period,
+        balance=loan_amount,
+        status='Active',
+        disbursed_by=user.id,
+        disbursed_date=datetime.now().date()
+    )
+
+    db.session.add(loan)
+    db.session.flush()
+
+    # ---------------- GUARANTORS ----------------
+    for g in guarantors:
+        db.session.add(LoanGuarantor(
+            loan_no=loan_no,
+            guarantor_no=g["member_no"],
+            member_no=member_no,
+            amount_guaranteed=g["amount_guaranteed"]
+        ))
+
+    # ---------------- SCHEDULE ----------------
+    generate_schedule(loan)
+
+    db.session.commit()
+
+    return loan
+    
+    
+## ADD COMMITEE MEMBER
+@admin_bp.route('/committee-members')
+@login_required
+def committee_members():
+
+    rows = CreditCommitteeMember.query.order_by(
+        CreditCommitteeMember.status.desc(),
+        CreditCommitteeMember.role.asc()
+    ).all()
+
+    return render_template(
+        'admin/committee_members.html',
+        rows=rows
+    )
+
+
+@admin_bp.route('/committee-members/add', methods=['GET', 'POST'])
+@login_required
+def add_committee_member():
+
+    form = CommitteeMemberForm()
+
+    if form.validate_on_submit():
+
+        exists = CreditCommitteeMember.query.filter_by(
+            member_no=form.member_no.data
+        ).first()
+
+        if exists:
+            flash("Member already exists.", "danger")
+            return redirect(request.url)
+
+        rec = CreditCommitteeMember(
+            member_no=form.member_no.data,
+            name=form.name.data,
+            role=form.role.data,
+            status=form.status.data,
+            join_date=form.join_date.data
+        )
+
+        db.session.add(rec)
+        db.session.commit()
+
+        flash("Committee member added.", "success")
+
+        return redirect(url_for('admin.committee_members'))
+
+    return render_template(
+        'admin/add_committee_member.html',
+        form=form
+    )
+
+
+@admin_bp.route('/committee-members/edit/<int:id>', methods=['GET', 'POST'])
+@login_required
+def edit_committee_member(id):
+
+    rec = CreditCommitteeMember.query.get_or_404(id)
+
+    form = CommitteeMemberForm(obj=rec)
+
+    if form.validate_on_submit():
+
+        rec.member_no = form.member_no.data
+        rec.name = form.name.data
+        rec.role = form.role.data
+        rec.status = form.status.data
+        rec.join_date = form.join_date.data
+
+        db.session.commit()
+
+        flash("Member updated.", "success")
+
+        return redirect(url_for('admin.committee_members'))
+
+    return render_template(
+        'admin/add_committee_member.html',
+        form=form
+    )
+
+
+@admin_bp.route('/committee-members/deactivate/<int:id>')
+@login_required
+def deactivate_committee_member(id):
+
+    rec = CreditCommitteeMember.query.get_or_404(id)
+
+    rec.status = "INACTIVE"
+    rec.left_date = date.today()
+
+    db.session.commit()
+
+    flash("Member deactivated.", "warning")
+
+    return redirect(url_for('admin.committee_members'))
+
+
+@admin_bp.route('/committee-members/activate/<int:id>')
+@login_required
+def activate_committee_member(id):
+
+    rec = CreditCommitteeMember.query.get_or_404(id)
+
+    rec.status = "ACTIVE"
+    rec.left_date = None
+
+    db.session.commit()
+
+    flash("Member activated.", "success")
+
+    return redirect(url_for('admin.committee_members'))
