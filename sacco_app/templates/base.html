@@ -130,6 +130,12 @@
             Payment from Savings
           </a>
         </li>
+		<!-- Pay Loan From Guarantor -->
+		<li class="nav-item">
+		  <a class="nav-link"  href="{{ url_for('admin.repay_from_guarantor_savings') }}">
+			 🤝 Pay Loan From Guarantor
+		  </a>
+		</li>
 		 <li class="nav-item">
           <a class="nav-link" href="{{ url_for('admin.charge_membership_fee') }}">
             Charge Membership Fee
@@ -209,9 +215,17 @@
   <li class="nav-item">
     <a class="nav-link" href="{{ url_for('admin.monthly_balances') }}">🕵️Monthly Balances</a>
   </li>
+  
+  <li class="nav-item">
+      <a class="nav-link" href="{{ url_for('admin.apply_loan_page') }}">Apply Loan</a>
+  </li>
 
 </ul>
-
+<li class="nav-item">
+    <a class="nav-link" href="{{ url_for('admin.add_committee_member') }}">
+        Add Committee Member
+    </a>
+</li>
 
     </div>
 
