@@ -1,0 +1,84 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div class="container mt-4">
+
+<h4>Credit Committee Members</h4>
+
+<a href="{{ url_for('admin.add_committee_member') }}"
+   class="btn btn-primary mb-3">
+   + Add Member
+</a>
+
+{% with messages = get_flashed_messages(with_categories=true) %}
+{% for category, msg in messages %}
+<div class="alert alert-{{ category }}">{{ msg }}</div>
+{% endfor %}
+{% endwith %}
+
+<table class="table table-bordered table-striped">
+
+<thead>
+<tr>
+<th>Member No</th>
+<th>Name</th>
+<th>Role</th>
+<th>Status</th>
+<th>Join Date</th>
+<th>Actions</th>
+</tr>
+</thead>
+
+<tbody>
+
+{% for r in rows %}
+<tr>
+
+<td>{{ r.member_no }}</td>
+<td>{{ r.name }}</td>
+<td>{{ r.role }}</td>
+
+<td>
+{% if r.status == "ACTIVE" %}
+<span class="badge bg-success">ACTIVE</span>
+{% else %}
+<span class="badge bg-danger">INACTIVE</span>
+{% endif %}
+</td>
+
+<td>{{ r.join_date }}</td>
+
+<td>
+
+<a href="{{ url_for('admin.edit_committee_member', id=r.id) }}"
+   class="btn btn-sm btn-warning">
+   Edit
+</a>
+
+{% if r.status == "ACTIVE" %}
+
+<a href="{{ url_for('admin.deactivate_committee_member', id=r.id) }}"
+   class="btn btn-sm btn-danger">
+   Deactivate
+</a>
+
+{% else %}
+
+<a href="{{ url_for('admin.activate_committee_member', id=r.id) }}"
+   class="btn btn-sm btn-success">
+   Activate
+</a>
+
+{% endif %}
+
+</td>
+
+</tr>
+{% endfor %}
+
+</tbody>
+</table>
+
+</div>
+
+{% endblock %}

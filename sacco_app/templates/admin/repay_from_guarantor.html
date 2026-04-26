@@ -1,0 +1,218 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div class="container mt-4">
+  <div class="card shadow-sm border-0">
+    <div class="card-body">
+
+      <h4 class="mb-4 text-primary">
+        🤝 Loan Recovery from Guarantor Savings
+      </h4>
+
+      <form id="repayForm"
+            method="POST"
+            action="{{ url_for('admin.repay_from_guarantor_savings') }}">
+
+        <!-- =============================== -->
+        <!-- LOAN DEFAULTER SECTION -->
+        <!-- =============================== -->
+        <div class="border rounded p-3 mb-4 bg-light">
+          <h6 class="text-danger mb-3">⚠️ Loan Defaulter Details</h6>
+
+          <div class="mb-3">
+            <label class="form-label">Defaulter Member Number</label>
+            <input type="text"
+                   name="member_no"
+                   id="member_no"
+                   class="form-control"
+                   placeholder="Enter defaulter member number"
+                   required>
+          </div>
+
+          <div class="mb-3">
+            <label class="form-label">Defaulter Name</label>
+            <input type="text"
+                   id="member_name"
+                   class="form-control"
+                   readonly>
+          </div>
+
+          <div class="mb-3">
+            <label class="form-label">Loan Balance (KSh)</label>
+            <input type="text"
+                   id="loan_balance"
+                   class="form-control"
+                   readonly>
+          </div>
+
+          <div class="mb-3">
+            <label class="form-label">Amount Due (KSh)</label>
+            <input type="text"
+                   id="amount_due"
+                   class="form-control"
+                   readonly>
+          </div>
+        </div>
+
+        <!-- =============================== -->
+        <!-- GUARANTOR SECTION -->
+        <!-- =============================== -->
+        <div class="border rounded p-3 mb-4 bg-light">
+          <h6 class="text-success mb-3">💳 Guarantor Details</h6>
+
+          <div class="mb-3">
+            <label class="form-label">Guarantor Member Number</label>
+            <input type="text"
+                   name="guarantor_no"
+                   id="guarantor_no"
+                   class="form-control"
+                   placeholder="Enter guarantor member number"
+                   required>
+          </div>
+
+          <div class="mb-3">
+            <label class="form-label">Guarantor Name</label>
+            <input type="text"
+                   id="guarantor_name"
+                   class="form-control"
+                   readonly>
+          </div>
+
+          <div class="mb-3">
+            <label class="form-label">Guarantor Savings Balance (KSh)</label>
+            <input type="text"
+                   id="guarantor_savings"
+                   class="form-control"
+                   readonly>
+          </div>
+        </div>
+
+        <!-- =============================== -->
+        <!-- PAYMENT SECTION -->
+        <!-- =============================== -->
+        <div class="border rounded p-3 bg-light">
+
+          <div class="mb-3">
+            <label class="form-label">Recovery Amount (KSh)</label>
+            <input type="number"
+                   step="0.01"
+                   min="0"
+                   name="amount"
+                   id="amount"
+                   class="form-control"
+                   required>
+          </div>
+
+          <div class="mb-3">
+            <label class="form-label">Narration</label>
+            <input type="text"
+                   name="narration"
+                   id="narration"
+                   class="form-control"
+                   placeholder="Optional narration">
+          </div>
+
+          <button type="submit"
+                  class="btn btn-success w-100">
+            Submit Recovery
+          </button>
+
+        </div>
+
+      </form>
+
+    </div>
+  </div>
+</div>
+
+<script>
+/* =======================================
+   FETCH LOAN DEFAULTER DETAILS
+======================================= */
+document.getElementById('member_no').addEventListener('blur', async function () {
+
+    const memberNo = this.value.trim();
+
+    if (!memberNo) return;
+
+    document.getElementById('member_name').value = 'Loading...';
+    document.getElementById('loan_balance').value = '';
+    document.getElementById('amount_due').value = '';
+
+    try {
+        const response = await fetch(`/admin/api/member_loan_info?member_no=${memberNo}`);
+        const data = await response.json();
+
+        if (data.error) {
+            document.getElementById('member_name').value = data.error;
+            return;
+        }
+
+        document.getElementById('member_name').value = data.member_name || '';
+        document.getElementById('loan_balance').value =
+            Number(data.loan_balance || 0).toLocaleString();
+
+        document.getElementById('amount_due').value =
+            Number(data.amount_due || 0).toLocaleString();
+
+    } catch (error) {
+        document.getElementById('member_name').value = 'Error loading data';
+    }
+
+});
+
+
+/* =======================================
+   FETCH GUARANTOR DETAILS
+======================================= */
+document.getElementById('guarantor_no').addEventListener('blur', async function () {
+
+    const guarantorNo = this.value.trim();
+
+    if (!guarantorNo) return;
+
+    document.getElementById('guarantor_name').value = 'Loading...';
+    document.getElementById('guarantor_savings').value = '';
+
+    try {
+        const response = await fetch(`/admin/api/member_info/${guarantorNo}`);
+        const data = await response.json();
+
+        if (data.error) {
+            document.getElementById('guarantor_name').value = data.error;
+            return;
+        }
+
+        document.getElementById('guarantor_name').value = data.member_name || '';
+
+        document.getElementById('guarantor_savings').value =
+            Number(data.savings_balance || 0).toLocaleString();
+
+    } catch (error) {
+        document.getElementById('guarantor_name').value = 'Error loading data';
+    }
+
+});
+
+
+/* =======================================
+   CONFIRM SUBMIT
+======================================= */
+document.getElementById('repayForm').addEventListener('submit', function(e) {
+
+    const amount = document.getElementById('amount').value;
+    const defaulter = document.getElementById('member_name').value;
+    const guarantor = document.getElementById('guarantor_name').value;
+
+    const msg =
+        `Recover KSh ${amount} from ${guarantor}'s savings ` +
+        `to pay ${defaulter}'s loan?`;
+
+    if (!confirm(msg)) {
+        e.preventDefault();
+    }
+
+});
+</script>
+
+{% endblock %}

@@ -1,0 +1,248 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="container mt-4">
+  <h4>Loan Application</h4>
+
+  <form method="POST">
+    {{ form.hidden_tag() }}
+
+    <!-- MEMBER -->
+    <div class="card p-3 mb-3">
+      <div class="row g-3">
+
+        <div class="col-md-3">
+          {{ form.member_no.label }}
+          {{ form.member_no(class="form-control", id="member_no") }}
+        </div>
+
+        <div class="col-md-3">
+          <label>Member Name</label>
+          <input type="text" id="member_name" class="form-control" readonly>
+        </div>
+
+        <div class="col-md-3">
+          <label>Savings Balance</label>
+          <input type="text" id="member_savings" class="form-control" readonly>
+        </div>
+
+        <div class="col-md-3">
+          {{ form.loan_amount.label }}
+          {{ form.loan_amount(class="form-control", id="loan_amount") }}
+        </div>
+
+        <div class="col-md-3">
+          {{ form.loan_period.label }}
+          {{ form.loan_period(class="form-control") }}
+        </div>
+
+      </div>
+    </div>
+
+    <!-- GUARANTORS -->
+    <div class="card p-3 mb-3">
+      <div class="d-flex justify-content-between">
+				<h6>Guarantors</h6>
+		<button type="button" class="btn btn-sm btn-secondary" onclick="addGuarantor()">+ Add</button>
+
+		<div id="guarantors">
+
+		  <!-- Default first row -->
+		  <div class="row mb-2 guarantor-row">
+
+			<div class="col-md-3">
+			  <input name="guarantors-0-member_no" class="form-control guarantor-no" placeholder="Member No">
+			</div>
+
+			<div class="col-md-3">
+			  <input type="text" class="form-control guarantor-name" readonly>
+			</div>
+
+			<div class="col-md-3">
+			  <input type="text" class="form-control guarantor-savings" readonly>
+			</div>
+
+			<div class="col-md-3">
+			  <input name="guarantors-0-amount_guaranteed" class="form-control guarantor-amount" placeholder="Amount">
+			</div>
+
+		  </div>
+		  {#
+			{% if app.status == "APPROVED" %}
+			<a href="{{ url_for('admin.disburse_loan') }}?application_id={{ app.id }}"
+			   class="btn btn-success btn-sm">
+			   Disburse
+			</a>
+			{% endif %} 
+			#}
+		</div>
+      <!-- STATUS -->
+      <div id="guarantee_status" class="fw-bold mt-2"></div>
+
+    </div>
+
+<div class="d-flex justify-content-end gap-2">
+  <a href="javascript:history.back()" class="btn btn-secondary">
+    Cancel
+  </a>
+
+  <button type="submit" class="btn btn-primary">
+    Submit Loan
+  </button>
+</div>
+  </form>
+</div>
+
+<script>
+document.addEventListener("DOMContentLoaded", () => {
+
+  // =========================
+  // MEMBER LOOKUP
+  // =========================
+  document.getElementById("member_no").addEventListener("blur", async function() {
+    const memberNo = this.value.trim();
+    if (!memberNo) return;
+
+    const res = await fetch(`/admin/api/member_info/${memberNo}`);
+    const data = await res.json();
+
+    if (data.error) {
+      alert(data.error);
+      document.getElementById("member_name").value = "";
+      document.getElementById("member_savings").value = "";
+    } else {
+      document.getElementById("member_name").value = data.member_name;
+      document.getElementById("member_savings").value = data.savings_balance.toFixed(2);
+    }
+
+    validateAll();
+  });
+
+  // =========================
+  // GUARANTOR BINDING
+  // =========================
+  function bindGuarantor(row) {
+    const gNo = row.querySelector(".guarantor-no");
+    const gAmount = row.querySelector(".guarantor-amount");
+
+    let savings = 0;
+
+    gNo.addEventListener("blur", async function() {
+      const val = this.value.trim();
+      if (!val) return;
+
+      const res = await fetch(`/admin/api/member_info/${val}`);
+      const data = await res.json();
+
+      if (data.error) {
+        alert(data.error);
+        row.querySelector(".guarantor-name").value = "";
+        row.querySelector(".guarantor-savings").value = "";
+        savings = 0;
+      } else {
+        row.querySelector(".guarantor-name").value = data.member_name;
+        row.querySelector(".guarantor-savings").value = data.savings_balance.toFixed(2);
+        savings = parseFloat(data.savings_balance);
+      }
+    });
+
+    gAmount.addEventListener("input", function() {
+      const val = parseFloat(this.value) || 0;
+
+      if (val > savings) {
+        alert("Guarantor cannot exceed their savings");
+        this.value = "";
+      }
+
+      validateAll();
+    });
+  }
+
+  document.querySelectorAll(".guarantor-row").forEach(bindGuarantor);
+
+  // =========================
+  // ADD GUARANTOR
+  // =========================
+  window.addGuarantor = function() {
+    const index = document.querySelectorAll(".guarantor-row").length;
+
+    const div = document.createElement("div");
+    div.classList.add("row", "mb-2", "guarantor-row");
+
+    div.innerHTML = `
+      <div class="col-md-3">
+        <input name="guarantors-${index}-member_no" class="form-control guarantor-no">
+      </div>
+      <div class="col-md-3">
+        <input type="text" class="form-control guarantor-name" readonly>
+      </div>
+      <div class="col-md-3">
+        <input type="text" class="form-control guarantor-savings" readonly>
+      </div>
+      <div class="col-md-3">
+        <input name="guarantors-${index}-amount_guaranteed" class="form-control guarantor-amount">
+      </div>
+    `;
+
+    document.getElementById("guarantors").appendChild(div);
+    bindGuarantor(div);
+  }
+
+  // =========================
+  // 🔥 FULL VALIDATION
+  // =========================
+  function validateAll() {
+  const loanAmount = parseFloat(document.getElementById("loan_amount").value) || 0;
+  const savings = parseFloat(document.getElementById("member_savings").value);
+
+  const status = document.getElementById("guarantee_status");
+
+  // 🚨 FIX 1: MEMBER MUST BE LOADED FIRST
+  if (isNaN(savings)) {
+    status.innerHTML = "❌ Enter member number first";
+    status.style.color = "red";
+    return false;
+  }
+
+  let totalGuarantee = 0;
+  document.querySelectorAll(".guarantor-amount").forEach(i => {
+    totalGuarantee += parseFloat(i.value) || 0;
+  });
+
+  // ❌ RULE 1: Loan ≤ 3x savings
+  if (loanAmount > savings * 3) {
+    status.innerHTML = "❌ Loan exceeds 3× member savings";
+    status.style.color = "red";
+    return false;
+  }
+
+  // ❌ RULE 2: Guarantee must cover loan
+  if (totalGuarantee < loanAmount) {
+    status.innerHTML = "❌ Total guarantee is less than loan amount";
+    status.style.color = "red";
+    return false;
+  }
+
+  // ✅ OK
+  status.innerHTML = "✅ Loan and guarantee valid";
+  status.style.color = "green";
+  return true;
+}
+  document.addEventListener("input", validateAll);
+
+  // =========================
+  // BLOCK SUBMIT IF INVALID
+  // =========================
+  document.querySelector("form").addEventListener("submit", function(e) {
+  const valid = validateAll();
+
+  console.log("Submitting form...", valid);
+
+  if (!valid) {
+    e.preventDefault();
+    alert("Fix validation errors before submitting");
+  }
+});
+});   // ✅ THIS WAS MISSING
+</script>
+
+{% endblock %}

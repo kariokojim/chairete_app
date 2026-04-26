@@ -1,0 +1,113 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div class="container mt-4">
+
+    <h4>Add Credit Committee Member</h4>
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+            {% for category, msg in messages %}
+                <div class="alert alert-{{ category }} alert-dismissible fade show" role="alert">
+                    {{ msg }}
+                    <button type="button"
+                            class="btn-close"
+                            data-bs-dismiss="alert">
+                    </button>
+                </div>
+            {% endfor %}
+        {% endif %}
+    {% endwith %}
+
+    <form method="POST">
+
+        {{ form.hidden_tag() }}
+
+        <div class="row">
+
+            <!-- Member Number -->
+            <div class="col-md-6 mb-3">
+                {{ form.member_no.label }}
+                {{ form.member_no(class="form-control", placeholder="Enter Member Number") }}
+            </div>
+
+            <!-- Auto Name -->
+            <div class="col-md-6 mb-3">
+                {{ form.name.label }}
+                {{ form.name(class="form-control", readonly=True) }}
+            </div>
+
+            <!-- Role -->
+            <div class="col-md-6 mb-3">
+                {{ form.role.label }}
+                {{ form.role(class="form-select") }}
+            </div>
+
+            <!-- Status -->
+            <div class="col-md-6 mb-3">
+                {{ form.status.label }}
+                {{ form.status(class="form-select") }}
+            </div>
+
+            <!-- Join Date -->
+            <div class="col-md-6 mb-3">
+                {{ form.join_date.label }}
+                {{ form.join_date(class="form-control") }}
+            </div>
+
+        </div>
+
+        <div class="mt-3">
+
+            {{ form.submit(class="btn btn-success") }}
+
+            <a href="{{ url_for('admin.committee_members') }}"
+               class="btn btn-secondary">
+                Cancel
+            </a>
+
+        </div>
+
+    </form>
+
+</div>
+
+<script>
+document.addEventListener("DOMContentLoaded", function () {
+
+    const memberInput = document.getElementById("member_no");
+    const nameInput   = document.getElementById("name");
+
+    if(memberInput){
+
+        memberInput.addEventListener("blur", function () {
+
+            let memberNo = memberInput.value.trim();
+
+            if(memberNo === "") return;
+
+            fetch(`/admin/api/member_info/${memberNo}`)
+                .then(response => response.json())
+                .then(data => {
+
+                    if(data.error){
+                        nameInput.value = "";
+                        alert("Member not found.");
+                    }else{
+                        nameInput.value = data.member_name;
+                    }
+
+                })
+                .catch(error => {
+                    console.log(error);
+                });
+
+        });
+
+    }
+
+});
+</script>
+
+{% endblock %}
+

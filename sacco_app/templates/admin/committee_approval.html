@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Chairete SACCO - Credit Committee Approval</title>
+
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+
+    <style>
+        body{
+            background:#f4f6f9;
+        }
+        .approval-card{
+            max-width:950px;
+            margin:auto;
+            margin-top:40px;
+            border:none;
+            border-radius:14px;
+        }
+        .brand{
+            font-size:28px;
+            font-weight:700;
+            color:#0d6efd;
+        }
+        .sub{
+            color:#6c757d;
+        }
+        .section-title{
+            font-weight:700;
+            color:#0d6efd;
+            margin-top:18px;
+        }
+        .badge-status{
+            font-size:13px;
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+
+    <div class="card shadow approval-card p-4">
+
+        <!-- Header -->
+        <div class="text-center mb-4">
+            <div class="brand">CHAIRETE SACCO</div>
+            <div class="sub">Credit Committee Loan Approval</div>
+        </div>
+
+        <!-- Applicant Details -->
+        <h5 class="section-title">Applicant Details</h5>
+
+        <table class="table table-bordered">
+            <tr>
+                <th width="35%">Applicant Name</th>
+                <td>{{ applicant.name if applicant else loan_app.member_no }}</td>
+            </tr>
+            <tr>
+                <th>Member Number</th>
+                <td>{{ loan_app.member_no }}</td>
+            </tr>
+            <tr>
+                <th>Loan Amount</th>
+                <td>KES {{ "{:,.2f}".format(loan_app.amount) }}</td>
+            </tr>
+            <tr>
+                <th>Repayment Period</th>
+                <td>{{ loan_app.period }} Months</td>
+            </tr>
+            <tr>
+                <th>Applicant Deposits</th>
+                <td class="fw-bold text-success">
+                    KES {{ "{:,.2f}".format(applicant_savings) }}
+                </td>
+            </tr>
+            <tr>
+                <th>Application Status</th>
+                <td>
+                    <span class="badge bg-warning text-dark">
+                        {{ loan_app.status }}
+                    </span>
+                </td>
+            </tr>
+        </table>
+
+        <!-- Guarantors -->
+        <h5 class="section-title">Guarantors Summary</h5>
+
+        <table class="table table-striped table-bordered">
+            <thead class="table-light">
+                <tr>
+                    <th>#</th>
+                    <th>Guarantor Name</th>
+                    <th>Member No</th>
+                    <th>Savings</th>
+                    <th>Guaranteed</th>
+                    <th>Status</th>
+                </tr>
+            </thead>
+
+            <tbody>
+                {% for g in guarantors %}
+                <tr>
+                    <td>{{ loop.index }}</td>
+
+                    <td>
+                        {{ g.name if g.name else g.guarantor_no }}
+                    </td>
+
+                    <td>{{ g.guarantor_no }}</td>
+
+                    <td>
+                        KES {{ "{:,.2f}".format(g.savings) }}
+                    </td>
+
+                    <td class="fw-bold text-primary">
+                        KES {{ "{:,.2f}".format(g.amount_guaranteed) }}
+                    </td>
+
+                    <td>
+                        {% if g.rejected %}
+                            <span class="badge bg-danger badge-status">
+                                Rejected
+                            </span>
+
+                        {% elif g.approved %}
+                            <span class="badge bg-success badge-status">
+                                Approved
+                            </span>
+
+                        {% else %}
+                            <span class="badge bg-secondary badge-status">
+                                Pending
+                            </span>
+                        {% endif %}
+                    </td>
+
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+		<h5 class="section-title">Credit Assessment</h5>
+
+		<table class="table table-bordered">
+		<tr>
+			<th>Debt Ratio</th>
+			<td>{{ debt_ratio }}%</td>
+		</tr>
+		<tr>
+			<th>Qualification Score</th>
+			<td>{{ score }}/100</td>
+		</tr>
+		<tr>
+			<th>Risk Flag</th>
+			<td>
+				{% if risk_flag == 'GREEN' %}
+					<span class="badge bg-success">GREEN</span>
+				{% elif risk_flag == 'AMBER' %}
+					<span class="badge bg-warning text-dark">AMBER</span>
+				{% else %}
+					<span class="badge bg-danger">RED</span>
+				{% endif %}
+			</td>
+		</tr>
+		</table>
+        <!-- Committee Decision -->
+        <div class="mt-4 text-center">
+
+            {% if approval.approved %}
+                <div class="alert alert-success">
+                    ✅ You already approved this application.
+                </div>
+
+            {% else %}
+
+            <form method="POST">
+
+                <button type="submit"
+                        name="action"
+                        value="approve"
+                        class="btn btn-success btn-lg me-3">
+                    ✅ Approve
+                </button>
+
+                <button type="submit"
+                        name="action"
+                        value="reject"
+                        class="btn btn-danger btn-lg">
+                    ❌ Reject
+                </button>
+
+            </form>
+
+            {% endif %}
+        </div>
+
+        <hr>
+
+        <p class="text-center text-muted mb-0">
+            Chairete SACCO Loan Management System
+        </p>
+
+    </div>
+
+</div>
+
+</body>
+</html>
