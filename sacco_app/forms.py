@@ -103,3 +103,53 @@ class LoanRepaymentForm(FlaskForm):
     bank_txn_date = DateField('Transaction Date', format='%Y-%m-%d', validators=[DataRequired()])
     narration = TextAreaField('Narration', default='Member deposit')
     submit = SubmitField('Post Payment')
+    
+    
+from flask_wtf import FlaskForm
+from wtforms import StringField, DecimalField, IntegerField, SelectField, FieldList, FormField
+from wtforms.validators import DataRequired, NumberRange
+
+
+# -----------------
+# GUARANTOR SUBFORM
+# -----------------
+class GuarantorForm(FlaskForm):
+    member_no = StringField('Guarantor No', validators=[DataRequired()])
+    amount_guaranteed = DecimalField('Amount', validators=[DataRequired(), NumberRange(min=1)])
+
+
+# -----------------
+# MAIN LOAN FORM
+# -----------------
+class LoanApplicationForm(FlaskForm):
+    member_no = StringField('Member No', validators=[DataRequired()])
+    loan_amount = DecimalField('Loan Amount', validators=[DataRequired(), NumberRange(min=1)])
+    loan_period = IntegerField('Loan Period', validators=[DataRequired()])
+    
+    loan_type = SelectField('Loan Type', choices=[
+        ('normal', 'Normal'),
+        ('emergency', 'Emergency')
+    ])
+
+    guarantors = FieldList(FormField(GuarantorForm), min_entries=1)
+class CommitteeMemberForm(FlaskForm):
+    member_no = StringField("Member Number", validators=[DataRequired()])
+    name = StringField("Name")
+    role = SelectField(
+        "Role",
+        choices=[
+            ("CHAIRPERSON", "Chairperson"),
+            ("SECRETARY", "Secretary"),
+            ("TREASURER", "Treasurer"),
+            ("MEMBER", "Member")
+        ]
+    )
+    status = SelectField(
+        "Status",
+        choices=[
+            ("ACTIVE", "Active"),
+            ("INACTIVE", "Inactive")
+        ]
+    )
+    join_date = DateField("Join Date", format='%Y-%m-%d')
+    submit = SubmitField("Save")
