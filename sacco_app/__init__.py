@@ -6,9 +6,13 @@ from .config import Config
 from .extensions import db, login_manager, migrate, csrf
 from sacco_app.utils.sidebar import SIDEBAR_ITEMS
 import calendar
+from flask_cors import CORS
+
 
 def create_app():
     app = Flask(__name__)
+    CORS(app, resources={r"/admin/api/*": 
+        { "origins": "*" }})
     BASE_DIR = os.path.abspath(os.path.dirname(__file__))
 
     app.config['UPLOAD_FOLDER'] = os.path.join(
