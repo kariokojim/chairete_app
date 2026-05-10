@@ -85,6 +85,130 @@ def create_user():
     # Render the form if GET or validation failed
     return render_template("admin/create_user.html", form=form)
 
+
+#### creat user on mobile 
+
+from flask import request, jsonify
+from flask_cors import CORS
+
+@admin_bp.route('/api/users/create', methods=['POST'])
+def api_create_user():
+    data = request.json
+
+    username = data.get('username', '').strip()
+    email = data.get('email', '').strip()
+    password = data.get('password', '').strip()
+    role = data.get('role', 'member')
+
+    if not username or not email or not password:
+        return jsonify({
+            "status": "error",
+            "message": "All fields are required"
+        }), 400
+
+    # check if user exists
+    existing = User.query.filter_by(email=email).first()
+    if existing:
+        return jsonify({
+            "status": "error",
+            "message": "User already exists"
+        }), 400
+
+    user = User(username=username, email=email, role=role)
+    user.set_password(password)
+
+    db.session.add(user)
+    db.session.commit()
+
+    return jsonify({
+        "status": "success",
+        "message": "User created successfully"
+    })
+    
+    
+## mobile login api page;
+
+from werkzeug.security import check_password_hash
+
+@admin_bp.route('/api/login', methods=['POST'])
+def api_login():
+
+    data = request.json
+
+    username = data.get('username', '').strip()
+    password = data.get('password', '').strip()
+
+    if not username or not password:
+        return jsonify({
+            "status": "error",
+            "message": "Username and password required"
+        }), 400
+
+    user = User.query.filter_by(username=username).first()
+
+    if not user:
+        return jsonify({
+            "status": "error",
+            "message": "User not found"
+        }), 404
+
+    if not user.check_password(password):
+        return jsonify({
+            "status": "error",
+            "message": "Invalid password"
+        }), 401
+
+    return jsonify({
+        "status": "success",
+        "message": "Login successful",
+        "username": user.username,
+        "role": user.role
+    })
+    
+    
+### Mobile api get balances
+@admin_bp.route('/api/dashboard/<username>', methods=['GET'])
+def api_dashboard(username):
+
+    user = User.query.filter_by(username=username).first()
+
+    if not user:
+        return jsonify({
+            "status": "error",
+            "message": "User not found"
+        }), 404
+
+    accounts = SaccoAccount.query.filter_by(
+        member_no=username
+    ).all()
+
+    savings_balance = 0
+    share_capital = 0
+    loan_balance = 0
+
+    for account in accounts:
+
+        if account.account_type == "SAVINGS":
+            savings_balance = float(account.balance)
+
+        elif account.account_type == "SHARE_CAPITAL":
+            share_capital = float(account.balance)
+
+        elif account.account_type == "LOAN":
+            loan_balance = float(account.balance)
+
+    return jsonify({
+
+        "status": "success",
+
+        "username": username,
+
+        "savings_balance": savings_balance,
+
+        "share_capital": share_capital,
+
+        "loan_balance": loan_balance,
+    })
 ##generate or add new member
 def generate_member_no():
     # Get last member
