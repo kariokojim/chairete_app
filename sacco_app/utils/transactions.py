@@ -1,7 +1,7 @@
 # sacco_app/utils/transactions.py
 from sacco_app.extensions import db
 from sacco_app.models import Member, Transaction,GLAccount,GLTransaction,SaccoAccount
-from datetime import datetime
+from datetime import datetime,date
 from decimal import Decimal
 import random, uuid
 
@@ -84,7 +84,7 @@ def post_savings(member_no, amount, user, narration, bank_txn_date):
 
 ##### POSTING PAYMENTS FROM BANK
 
-def process_loan_repayment(member_no, amount, narration, bank_txn_date, posted_by):
+def process_loan_prepayment(member_no, amount, narration, bank_txn_date, posted_by):
     """
     Bank posting logic:
     1. If member has ACTIVE loan:
@@ -147,6 +147,7 @@ def process_loan_repayment(member_no, amount, narration, bank_txn_date, posted_b
     # --------------------------------------------------
     # DR CASH (RECEIPT)
     # --------------------------------------------------
+    """
     gl_cash.balance += amount
     transactions.append(Transaction(
         txn_no=f"ROW{uuid.uuid4().hex[:12].upper()}",
@@ -162,7 +163,7 @@ def process_loan_repayment(member_no, amount, narration, bank_txn_date, posted_b
         posted_by=posted_by,
         running_balance=gl_cash.balance
     ))
-
+    """
     # --------------------------------------------------
     # ACTIVE LOAN (IF ANY)
     # --------------------------------------------------
@@ -189,15 +190,8 @@ def process_loan_repayment(member_no, amount, narration, bank_txn_date, posted_b
 
         schedules = LoanSchedule.query.filter(
             LoanSchedule.loan_no == loan.loan_no,
-            LoanSchedule.due_date <= txn_date_only,
-            or_(
-                LoanSchedule.interest_paid < LoanSchedule.interest_due,
-                LoanSchedule.principal_paid < LoanSchedule.principal_due
-            )
-        ).order_by(
-            LoanSchedule.due_date,
-            LoanSchedule.installment_no
-        ).all()
+            LoanSchedule.status.in_(["DUE", "PARTIAL"]),
+            LoanSchedule.due_date <= date.today() ).order_by(LoanSchedule.due_date,LoanSchedule.installment_no).all()
 
         for sch in schedules:
             if remaining <= 0:
@@ -307,6 +301,68 @@ def process_loan_repayment(member_no, amount, narration, bank_txn_date, posted_b
             loan.balance = Decimal('0.00')
             loan.status = 'CLEARED'
 
+    # ==================================================
+    # LOAN PREPAYMENT
+    # ==================================================
+    if loan and remaining > 0:
+
+        outstanding_balance = Decimal(
+            member_loan_acc.balance or 0
+        )
+
+        if outstanding_balance > 0:
+
+            prepayment = min(
+                remaining,
+                outstanding_balance
+            )
+
+            member_loan_acc.balance -= prepayment
+            gl_loan_control.balance -= prepayment
+            loan.balance -= prepayment
+
+            remaining -= prepayment
+
+            transactions.extend([
+
+                Transaction(
+                    txn_no=f"ROW{uuid.uuid4().hex[:12].upper()}",
+                    member_no=member_no,
+                    account_no=member_loan_acc.account_number,
+                    gl_account='MEMBER_LOAN',
+                    tran_type='ASSET',
+                    debit_amount=prepayment,
+                    credit_amount=Decimal('0.00'),
+                    reference=txn_ref,
+                    narration='Loan prepayment',
+                    bank_txn_date=txn_date,
+                    posted_by=posted_by,
+                    running_balance=member_loan_acc.balance
+                ),
+
+                Transaction(
+                    txn_no=f"ROW{uuid.uuid4().hex[:12].upper()}",
+                    member_no='M000GL',
+                    account_no=gl_loan_control.account_number,
+                    gl_account='LOAN_CONTROL',
+                    tran_type='ASSET',
+                    debit_amount=prepayment,
+                    credit_amount=Decimal('0.00'),
+                    reference=txn_ref,
+                    narration=f"{narration} {member_no}",
+                    bank_txn_date=txn_date,
+                    posted_by=posted_by,
+                    running_balance=gl_loan_control.balance
+                )
+
+            ])
+
+            # Loan cleared
+            if loan.balance <= 0:
+
+                loan.balance = Decimal('0.00')
+                loan.status = 'CLEARED'
+                
     # ==================================================
     # REMAINDER → SAVINGS (LOAN OR NO LOAN)
     # ==================================================
@@ -456,7 +512,7 @@ def regenerate_remaining_schedules(loan, effective_date):
 
 #LOAN PRE-PAYMENT
 
-def process_loan_prepayment(member_no, amount, narration, bank_txn_date, posted_by):
+def process_loan_prepayment2(member_no, amount, narration, bank_txn_date, posted_by):
     """
     Processes a loan prepayment:
     - Pays any due interest and principal first.
