@@ -129,6 +129,7 @@ def api_create_user():
 ## mobile login api page;
 
 from werkzeug.security import check_password_hash
+from flask_jwt_extended import create_access_token
 
 @admin_bp.route('/api/login', methods=['POST'])
 def api_login():
@@ -156,10 +157,14 @@ def api_login():
         return jsonify({
             "status": "error",
             "message": "Invalid password"
-        }), 401
+        }), 401   
+    access_token = create_access_token(
+        identity=user.username)
+
 
     return jsonify({
         "status": "success",
+        "token": access_token,
         "message": "Login successful",
         "username": user.username,
         "role": user.role
@@ -1451,6 +1456,7 @@ def upload_bank_postings():
 
                 # Ensure loan & interest ledgers exist
                 m_loan, m_interest = ensure_loan_ledgers(member_no)
+                outstanding_loan_balance = Decimal(m_loan.balance or 0)               
 
                 # Fetch only overdue schedules
                 schedules = LoanSchedule.query.filter(
@@ -1502,118 +1508,177 @@ def upload_bank_postings():
                     success += 1
                     continue
 
-                # ----------------------------------------------------------------------
-                # Apply each overdue schedule
-                # ----------------------------------------------------------------------
+                # ==========================================================
+                # GET ACTUAL OUTSTANDING LOAN BALANCE
+                # ==========================================================
+
+                outstanding_loan_balance = Decimal(m_loan.balance or 0)
+
+                # ==========================================================
+                # 1. PAY ALL OVERDUE INTEREST FIRST
+                # ==========================================================
+
                 for sched in schedules:
+
                     if remaining <= 0:
                         break
 
-                    # Compute due interest/principal
-                    int_due = (Decimal(sched.interest_due or 0) -
-                               Decimal(sched.interest_paid or 0))
-                    prin_due = (Decimal(sched.principal_due or 0) -
-                                Decimal(sched.principal_paid or 0))
+                    int_due = (
+                        Decimal(sched.interest_due or 0)
+                        - Decimal(sched.interest_paid or 0)
+                    )
 
-                    # --- 1) PAY INTEREST ---
-                    if int_due > 0 and remaining > 0:
-                        pay = min(remaining, int_due)
-                        sched.interest_paid += pay
-                        remaining -= pay
+                    if int_due <= 0:
+                        continue
 
-                        with db.session.no_autoflush:
-                            # DR MEMBER_INTEREST
-                            m_interest.balance -= pay
-                            db.session.add(m_interest)
-                            db.session.add(Transaction(
-                                txn_no=f"TXN{uuid.uuid4().hex[:12].upper()}",
-                                member_no=member_no,
-                                account_no=m_interest.account_number,
-                                gl_account="MEMBER_INTEREST",
-                                tran_type="ASSET",
-                                debit_amount=pay,
-                                credit_amount=Decimal("0"),
-                                running_balance=m_interest.balance,
-                                reference=txn_ref,
-                                narration=f"Interest paid - {narration}",
-                                bank_txn_date=txn_date,
-                                posted_by=current_user.username
-                            ))
+                    pay = min(remaining, int_due)
 
-                            # CR INTEREST CONTROL
-                            gl_interest.balance += pay
-                            db.session.add(gl_interest)
-                            db.session.add(Transaction(
-                                txn_no=f"TXN{uuid.uuid4().hex[:12].upper()}",
-                                member_no="M000GL",
-                                account_no=gl_interest.account_number,
-                                gl_account="LOAN_INTEREST_CONTROL",
-                                tran_type="INCOME",
-                                debit_amount=Decimal("0"),
-                                credit_amount=pay,
-                                running_balance=gl_interest.balance,
-                                reference=txn_ref,
-                                narration=f"Interest control credit",
-                                bank_txn_date=txn_date,
-                                posted_by=current_user.username
-                            ))
+                    sched.interest_paid += pay
+                    remaining -= pay
 
-                    # --- 2) PAY PRINCIPAL ---
-                    if prin_due > 0 and remaining > 0:
-                        pay = min(remaining, prin_due)
-                        sched.principal_paid += pay
-                        remaining -= pay
+                    with db.session.no_autoflush:
 
-                        with db.session.no_autoflush:
-                            # DR MEMBER_LOAN
-                            m_loan.balance -= pay
-                            db.session.add(m_loan)
-                            db.session.add(Transaction(
-                                txn_no=f"TXN{uuid.uuid4().hex[:12].upper()}",
-                                member_no=member_no,
-                                account_no=m_loan.account_number,
-                                gl_account="MEMBER_LOAN",
-                                tran_type="ASSET",
-                                debit_amount=pay,
-                                credit_amount=Decimal("0"),
-                                running_balance=m_loan.balance,
-                                reference=txn_ref,
-                                narration=f"Principal paid - {narration}",
-                                bank_txn_date=txn_date,
-                                posted_by=current_user.username
-                            ))
+                        # DR MEMBER INTEREST
+                        m_interest.balance -= pay
 
-                            # CR LOAN CONTROL
-                            gl_loan.balance -= pay
-                            db.session.add(gl_loan)
-                            db.session.add(Transaction(
-                                txn_no=f"TXN{uuid.uuid4().hex[:12].upper()}",
-                                member_no="M000GL",
-                                account_no=gl_loan.account_number,
-                                gl_account="LOAN_CONTROL",
-                                tran_type="ASSET",
-                                debit_amount=Decimal("0"),
-                                credit_amount=pay,
-                                running_balance=gl_loan.balance,
-                                reference=txn_ref,
-                                narration=f"Loan control credit",
-                                bank_txn_date=txn_date,
-                                posted_by=current_user.username
-                            ))
+                        db.session.add(Transaction(
+                            txn_no=f"TXN{uuid.uuid4().hex[:12].upper()}",
+                            member_no=member_no,
+                            account_no=m_interest.account_number,
+                            gl_account="MEMBER_INTEREST",
+                            tran_type="ASSET",
+                            debit_amount=pay,
+                            credit_amount=Decimal("0"),
+                            running_balance=m_interest.balance,
+                            reference=txn_ref,
+                            narration=f"Interest paid - {narration}",
+                            bank_txn_date=txn_date,
+                            posted_by=current_user.username
+                        ))
 
-                    # update schedule status
-                    if (sched.interest_paid >= sched.interest_due and
-                        sched.principal_paid >= sched.principal_due):
+                        # CR INTEREST CONTROL
+                        gl_interest.balance += pay
+
+                        db.session.add(Transaction(
+                            txn_no=f"TXN{uuid.uuid4().hex[:12].upper()}",
+                            member_no="M000GL",
+                            account_no=gl_interest.account_number,
+                            gl_account="LOAN_INTEREST_CONTROL",
+                            tran_type="INCOME",
+                            debit_amount=Decimal("0"),
+                            credit_amount=pay,
+                            running_balance=gl_interest.balance,
+                            reference=txn_ref,
+                            narration="Interest control credit",
+                            bank_txn_date=txn_date,
+                            posted_by=current_user.username
+                        ))
+
+                # ==========================================================
+                # 2. PAY ALL OVERDUE PRINCIPAL SECOND
+                # ==========================================================
+
+                for sched in schedules:
+
+                    if remaining <= 0:
+                        break
+
+                    if outstanding_loan_balance <= 0:
+                        break
+
+                    principal_due = (
+                        Decimal(sched.principal_due or 0)
+                        - Decimal(sched.principal_paid or 0)
+                    )
+
+                    if principal_due <= 0:
+                        continue
+
+                    # Never pay more than actual loan balance
+                    principal_due = min(
+                        principal_due,
+                        outstanding_loan_balance
+                    )
+
+                    pay = min(
+                        remaining,
+                        principal_due
+                    )
+
+                    sched.principal_paid += pay
+
+                    remaining -= pay
+
+                    outstanding_loan_balance -= pay
+
+                    with db.session.no_autoflush:
+
+                        # DR MEMBER LOAN
+                        m_loan.balance -= pay
+
+                        db.session.add(Transaction(
+                            txn_no=f"TXN{uuid.uuid4().hex[:12].upper()}",
+                            member_no=member_no,
+                            account_no=m_loan.account_number,
+                            gl_account="MEMBER_LOAN",
+                            tran_type="ASSET",
+                            debit_amount=pay,
+                            credit_amount=Decimal("0"),
+                            running_balance=m_loan.balance,
+                            reference=txn_ref,
+                            narration=f"Principal paid - {narration}",
+                            bank_txn_date=txn_date,
+                            posted_by=current_user.username
+                        ))
+
+                        # CR LOAN CONTROL
+                        gl_loan.balance -= pay
+
+                        db.session.add(Transaction(
+                            txn_no=f"TXN{uuid.uuid4().hex[:12].upper()}",
+                            member_no="M000GL",
+                            account_no=gl_loan.account_number,
+                            gl_account="LOAN_CONTROL",
+                            tran_type="ASSET",
+                            debit_amount=Decimal("0"),
+                            credit_amount=pay,
+                            running_balance=gl_loan.balance,
+                            reference=txn_ref,
+                            narration="Loan control credit",
+                            bank_txn_date=txn_date,
+                            posted_by=current_user.username
+                        ))
+
+                # ==========================================================
+                # UPDATE SCHEDULE STATUS AFTER ALL PAYMENTS
+                # ==========================================================
+
+                for sched in schedules:
+
+                    interest_balance = (
+                        Decimal(sched.interest_due or 0)
+                        - Decimal(sched.interest_paid or 0)
+                    )
+
+                    principal_balance = (
+                        Decimal(sched.principal_due or 0)
+                        - Decimal(sched.principal_paid or 0)
+                    )
+
+                    if interest_balance <= 0 and principal_balance <= 0:
                         sched.status = "PAID"
                     else:
                         sched.status = "PARTIAL"
 
-                # Update loan from member loan ledger
-                loan.balance = m_loan.balance
+                # ==========================================================
+                # UPDATE LOAN MASTER RECORD
+                # ==========================================================
+
+                loan.balance = outstanding_loan_balance
+
                 if loan.balance <= 0:
                     loan.balance = Decimal("0")
                     loan.status = "Cleared"
-
                 # ----------------------------------------------------------------------
                 # REMAINDER → SAVINGS
                 # ----------------------------------------------------------------------
