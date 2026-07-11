@@ -153,3 +153,25 @@ class CommitteeMemberForm(FlaskForm):
     )
     join_date = DateField("Join Date", format='%Y-%m-%d')
     submit = SubmitField("Save")
+    
+
+class MemberStatementForm(FlaskForm):
+
+    member_no = StringField(
+        "Member Number",
+        validators=[DataRequired()]
+    )
+
+    from_date = DateField(
+        "From Date",
+        format="%Y-%m-%d",
+        validators=[DataRequired()]
+    )
+
+    to_date = DateField(
+        "To Date",
+        format="%Y-%m-%d",
+        validators=[DataRequired()]
+    )
+
+    submit = SubmitField("Generate Statement")
