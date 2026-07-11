@@ -1,0 +1,288 @@
+{% extends "base.html" %}
+
+{% block title %}
+Member Statement
+{% endblock %}
+
+{% block content %}
+
+<div class="container-fluid mt-3">
+
+    <div class="card shadow">
+
+        <div class="card-header bg-primary text-white">
+
+            <div class="d-flex justify-content-between align-items-center">
+
+                <div>
+
+                    <h4 class="mb-0">
+                        <i class="fas fa-file-alt"></i>
+                        Member Statement
+                    </h4>
+
+                </div>
+
+                <div>
+
+                    <form method="POST"
+                          action="{{ url_for('admin.member_statement_pdf') }}">
+
+                        <input type="hidden" name="member_no"
+                               value="{{ member.member_no }}">
+
+                        <input type="hidden" name="from_date"
+                               value="{{ from_date.strftime('%Y-%m-%d') }}">
+
+                        <input type="hidden" name="to_date"
+                               value="{{ to_date.strftime('%Y-%m-%d') }}">
+
+                        <button class="btn btn-success">
+
+                            <i class="fas fa-file-pdf"></i>
+
+                            Download PDF
+
+                        </button>
+
+                    </form>
+
+                </div>
+
+            </div>
+
+        </div>
+
+        <div class="card-body">
+
+            <div class="row mb-3">
+
+                <div class="col-md-3">
+                    <strong>Member No</strong><br>
+                    {{ member.member_no }}
+                </div>
+
+                <div class="col-md-5">
+                    <strong>Member Name</strong><br>
+                    {{ member.name }}
+                </div>
+
+                <div class="col-md-4">
+                    <strong>Statement Period</strong><br>
+
+                    {{ from_date.strftime("%d-%b-%Y") }}
+                    -
+
+                    {{ to_date.strftime("%d-%b-%Y") }}
+
+                </div>
+
+            </div>
+
+            <hr>
+
+            <div class="table-responsive">
+
+                <table class="table table-bordered table-striped table-sm">
+
+                    <thead class="table-primary">
+
+                        <tr>
+
+                            <th>Date</th>
+
+                            <th class="text-end">Deposit</th>
+
+                            <th class="text-end">Interest</th>
+
+                            <th class="text-end">Loan</th>
+
+                            <th class="text-end">Savings</th>
+
+                            <th class="text-end">Savings Balance</th>
+
+                            <th class="text-end">Loan Balance</th>
+
+                        </tr>
+
+                    </thead>
+
+                    <tbody>
+
+                    {% for row in statement %}
+
+                        {% if row.description == "Balance B/F" %}
+
+                        <tr class="table-secondary fw-bold">
+
+                            <td>Balance B/F</td>
+
+                            <td></td>
+
+                            <td></td>
+
+                            <td></td>
+
+                            <td></td>
+
+                            <td class="text-end">
+
+                                {{ "{:,.2f}".format(row.saving_balance) }}
+
+                            </td>
+
+                            <td class="text-end">
+
+                                {{ "{:,.2f}".format(row.loan_balance) }}
+
+                            </td>
+
+                        </tr>
+
+                        {% else %}
+
+                        <tr>
+
+                            <td>
+
+                                {{ row.date.strftime("%d-%b-%Y") }}
+
+                            </td>
+
+                            <td class="text-end">
+
+                                {{ "{:,.2f}".format(row.deposit) }}
+
+                            </td>
+
+                            <td class="text-end">
+
+                                {{ "{:,.2f}".format(row.interest) }}
+
+                            </td>
+
+                            <td class="text-end">
+
+                                {{ "{:,.2f}".format(row.loan) }}
+
+                            </td>
+
+                            <td class="text-end">
+
+                                {{ "{:,.2f}".format(row.savings) }}
+
+                            </td>
+
+                            <td class="text-end">
+
+                                {{ "{:,.2f}".format(row.saving_balance) }}
+
+                            </td>
+
+                            <td class="text-end">
+
+                                {{ "{:,.2f}".format(row.loan_balance) }}
+
+                            </td>
+
+                        </tr>
+
+                        {% endif %}
+
+                    {% endfor %}
+
+                    </tbody>
+
+                    <tfoot class="table-light fw-bold">
+
+                        <tr>
+
+                            <td>TOTALS</td>
+
+                            <td class="text-end">
+
+                                {{ "{:,.2f}".format(totals.deposit) }}
+
+                            </td>
+
+                            <td class="text-end">
+
+                                {{ "{:,.2f}".format(totals.interest) }}
+
+                            </td>
+
+                            <td class="text-end">
+
+                                {{ "{:,.2f}".format(totals.loan) }}
+
+                            </td>
+
+                            <td class="text-end">
+
+                                {{ "{:,.2f}".format(totals.savings) }}
+
+                            </td>
+
+                            <td></td>
+
+                            <td></td>
+
+                        </tr>
+
+                    </tfoot>
+
+                </table>
+				
+				<div class="mt-4 d-flex justify-content-between">
+
+    <!-- Back Button -->
+    <a href="{{ url_for('admin.member_statement') }}"
+       class="btn btn-secondary">
+
+        <i class="fas fa-arrow-left"></i>
+        Back
+
+    </a>
+
+    <div>
+
+        <!-- Download PDF -->
+        <form method="POST"
+              action="{{ url_for('admin.member_statement_pdf') }}"
+              style="display:inline;">
+
+            <input type="hidden" name="member_no" value="{{ member.member_no }}">
+            <input type="hidden" name="from_date" value="{{ from_date.strftime('%Y-%m-%d') }}">
+            <input type="hidden" name="to_date" value="{{ to_date.strftime('%Y-%m-%d') }}">
+
+            <button type="submit" class="btn btn-success">
+
+                <i class="fas fa-file-pdf"></i>
+                Download PDF
+
+            </button>
+
+        </form>
+
+        <!-- Close -->
+        <a href="{{ url_for('admin.dashboard') }}"
+           class="btn btn-danger ms-2">
+
+            <i class="fas fa-times"></i>
+            Close
+
+        </a>
+
+    </div>
+
+</div>
+
+            </div>
+
+        </div>
+
+    </div>
+
+</div>
+
+{% endblock %}

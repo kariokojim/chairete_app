@@ -1,0 +1,146 @@
+{% extends "base.html" %}
+
+{% block title %}
+Member Statement
+{% endblock %}
+
+{% block content %}
+
+<div class="container mt-4">
+
+    <div class="card shadow">
+
+        <div class="card-header bg-primary text-white">
+
+            <h4>
+                <i class="fas fa-file-pdf"></i>
+                Member Statement
+            </h4>
+
+        </div>
+
+        <div class="card-body">
+
+            <form method="POST"       action="{{ url_for('admin.member_statement_pdf') }}">>
+
+                {{ form.hidden_tag() }}
+
+                <div class="row">
+
+                    <div class="col-md-4">
+
+                        {{ form.member_no.label(class="form-label") }}
+
+                        {{ form.member_no(
+                            class="form-control",
+                            id="member_no",
+                            autocomplete="off"
+                        ) }}
+
+                    </div>
+
+                    <div class="col-md-8">
+
+                        <label class="form-label">
+                            Member Name
+                        </label>
+
+                        <input
+                            type="text"
+                            id="member_name"
+                            class="form-control"
+                            readonly>
+
+                    </div>
+
+                </div>
+
+                <br>
+
+                <div class="row">
+
+                    <div class="col-md-4">
+
+                        {{ form.from_date.label(class="form-label") }}
+
+                        {{ form.from_date(class="form-control") }}
+
+                    </div>
+
+                    <div class="col-md-4">
+
+                        {{ form.to_date.label(class="form-label") }}
+
+                        {{ form.to_date(class="form-control") }}
+
+                    </div>
+
+                </div>
+
+                <br>
+			<div class="mt-3">
+
+				<button
+					type="submit"
+					class="btn btn-primary"
+					formaction="{{ url_for('admin.member_statement_view') }}">
+
+					<i class="fas fa-eye"></i>
+					View Statement
+
+				</button>
+
+				<button
+					type="submit"
+					class="btn btn-success"
+					formaction="{{ url_for('admin.member_statement_pdf') }}">
+
+					<i class="fas fa-file-pdf"></i>
+					Download PDF
+
+				</button>
+
+			</div>
+
+            </form>
+
+        </div>
+
+    </div>
+
+</div>
+
+<script>
+
+$("#member_no").keyup(function(){
+
+    let member_no = $(this).val();
+
+    if(member_no.length < 2)
+        return;
+
+    $.getJSON(
+        "/member_lookup/" + member_no,
+
+        function(data){
+
+            if(data.status=="OK"){
+
+                $("#member_name").val(data.member_name);
+
+            }
+            else{
+
+                $("#member_name").val("");
+
+            }
+
+        }
+
+    );
+
+});
+
+</script>
+
+{% endblock %}
