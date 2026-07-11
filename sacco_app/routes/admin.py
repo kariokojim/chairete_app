@@ -4,7 +4,7 @@ from flask_login import login_required,current_user
 from datetime import datetime, timedelta
 from sacco_app.extensions import db,csrf
 from sacco_app.models import CreditCommitteeMember,User,Member,generate_account_number,SaccoAccount,Transaction, Loan,LoanGuarantor, LoanSchedule, LoanInterest,AuditLog,CreditCommitteeApproval,LoanApplication
-from sacco_app.forms import CommitteeMemberForm,LoanApplicationForm,UserForm,AddMemberForm,LoanRepaymentForm,OpenAccountForm,PaymentPostingForm,LoanDisbursementForm,GuarantorForm,MemberDepositSearchForm
+from sacco_app.forms import MemberStatementForm,CommitteeMemberForm,LoanApplicationForm,UserForm,AddMemberForm,LoanRepaymentForm,OpenAccountForm,PaymentPostingForm,LoanDisbursementForm,GuarantorForm,MemberDepositSearchForm
 from werkzeug.security import generate_password_hash
 from sacco_app.utils.transactions import post_savings
 from decimal import Decimal
@@ -1911,9 +1911,926 @@ def dashboard():
         par_percentage=par_percentage
     )
 
+@admin_bp.route('/reports/member-statement', methods=['GET'])
+@login_required
+def member_statement():
+
+    form = MemberStatementForm()
+
+    return render_template(
+        'admin/member_statement.html',
+        form=form
+    )
+
 ##from sqlalchemy import text
+from collections import defaultdict
+
+def get_member_statement(member_no, from_date, to_date):
+    opening_savings = (
+    Transaction.query
+    .filter(
+        Transaction.member_no == member_no,
+        Transaction.gl_account == "SAVINGS",
+        Transaction.bank_txn_date < from_date
+    )
+    .order_by(
+        Transaction.bank_txn_date.desc(),
+        Transaction.id.desc()
+    )
+    .first()
+    )
+
+    opening_savings_balance = (
+        float(opening_savings.running_balance)
+        if opening_savings else 0.00
+    )
+    opening_loan = (
+        Transaction.query
+        .filter(
+            Transaction.member_no == member_no,
+            Transaction.gl_account == "MEMBER_LOAN",
+            Transaction.bank_txn_date < from_date
+        )
+        .order_by(
+            Transaction.bank_txn_date.desc(),
+            Transaction.id.desc()
+        )
+        .first()
+    )
+
+    opening_loan_balance = (
+        float(opening_loan.running_balance)
+        if opening_loan else 0.00
+    )
+    
+    last_savings_balance = opening_savings_balance
+    last_loan_balance = opening_loan_balance
+    
+    transactions = (
+        Transaction.query
+        .filter(
+            Transaction.member_no == member_no,
+            Transaction.bank_txn_date >= from_date,
+            Transaction.bank_txn_date <= to_date,
+        )
+        .order_by(
+            Transaction.bank_txn_date.asc(),
+            Transaction.id.asc()
+        )
+        .all()
+    )
+
+    grouped = defaultdict(list)
+
+    # Group all postings belonging to the same deposit
+    for tx in transactions:
+        grouped[tx.reference].append(tx)
+
+    # Sort deposits by date
+    sorted_groups = sorted(
+        grouped.items(),
+        key=lambda item: item[1][0].bank_txn_date
+    )
+
+    statement = []
+    
+    statement.append({
+
+    "description": "Balance B/F",
+
+    "date": None,
+
+    "reference": "",
+
+    "deposit": 0,
+
+    "interest": 0,
+
+    "loan": 0,
+
+    "savings": 0,
+
+    "saving_balance": opening_savings_balance,
+
+    "loan_balance": opening_loan_balance
+
+    })
+
+    total_deposit = 0
+    total_interest = 0
+    total_loan = 0
+    total_savings = 0
+
+    # Remember previous balances
+    last_savings_balance = opening_savings_balance
+    last_loan_balance = opening_loan_balance
+
+    for reference, postings in sorted_groups:
+
+        deposit_date = postings[0].bank_txn_date
+
+        interest_paid = 0.0
+        loan_paid = 0.0
+        savings_deposit = 0.0
+
+        # None means "no posting for this account"
+        savings_balance = None
+        loan_balance = None
+
+        amount_deposited = 0.0
+
+        for p in postings:
+
+            debit = float(p.debit_amount or 0)
+            credit = float(p.credit_amount or 0)
+
+            # Total amount received for this reference
+            amount_deposited += debit + credit
+
+            if p.gl_account == "MEMBER_INTEREST":
+                interest_paid += debit
+
+            elif p.gl_account == "MEMBER_LOAN":
+                loan_paid += debit
+                loan_balance = float(p.running_balance or 0)
+
+            elif p.gl_account == "SAVINGS":
+                savings_deposit += credit
+                if p.running_balance is not None:
+                    savings_balance = float(p.running_balance)
+
+        # Carry forward balances if there was no posting
+        if savings_balance is None:
+            savings_balance = last_savings_balance
+        else:
+            last_savings_balance = savings_balance
+
+        if loan_balance is None:
+            loan_balance = last_loan_balance
+        else:
+            last_loan_balance = loan_balance
+
+        # Ignore empty references
+        if amount_deposited == 0:
+            continue
+
+        total_deposit += amount_deposited
+        total_interest += interest_paid
+        total_loan += loan_paid
+        total_savings += savings_deposit
+        
+        
+        statement.append({
+
+            "date": deposit_date,
+
+            "reference": reference,
+
+            "deposit": amount_deposited,
+
+            "interest": interest_paid,
+
+            "loan": loan_paid,
+
+            "savings": savings_deposit,
+
+            "saving_balance": savings_balance,
+
+            "loan_balance": loan_balance
+
+        })
+
+    totals = {
+        "deposit": total_deposit,
+        "interest": total_interest,
+        "loan": total_loan,
+        "savings": total_savings
+    }
+
+    return statement, totals
+    
+    
+##view new statement;
+
+@admin_bp.route('/reports/member-statement/view', methods=['POST'])
+@login_required
+def member_statement_view():
+
+    member_no = request.form.get("member_no")
+    from_date = datetime.strptime(
+        request.form.get("from_date"),
+        "%Y-%m-%d"
+    ).date()
+
+    to_date = datetime.strptime(
+        request.form.get("to_date"),
+        "%Y-%m-%d"
+    ).date()
+
+    member = Member.query.filter_by(
+        member_no=member_no
+    ).first()
+
+    if not member:
+        flash("Member not found.", "danger")
+        return redirect(url_for("admin.member_statement"))
+
+    statement, totals = get_member_statement(
+        member_no,
+        from_date,
+        to_date
+    )
+
+    return render_template(
+        "admin/member_statement_view.html",
+        member=member,
+        from_date=from_date,
+        to_date=to_date,
+        statement=statement,
+        totals=totals
+    )
+####new pdf code 
 
 
+@admin_bp.route('/reports/member-statement/pdf', methods=['POST'])
+@login_required
+def member_statement_pdf():
+
+    from io import BytesIO
+    from datetime import datetime, date
+
+    from flask import current_app, send_file
+    from reportlab.lib import colors
+    from reportlab.lib.enums import TA_LEFT
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib.units import cm
+    from reportlab.platypus import (
+        SimpleDocTemplate,
+        Paragraph,
+        Table,
+        TableStyle,
+        Spacer,
+        Image
+    )
+
+    # ---------------------------------------------------
+    # Get Parameters
+    # ---------------------------------------------------
+
+    member_no = (request.form.get("member_no") or "").strip()
+    start_str = request.form.get("from_date")
+    end_str = request.form.get("to_date")
+
+    today = date.today()
+
+    if not member_no:
+        flash("Member Number is required.", "warning")
+        return redirect(url_for("admin.member_statement"))
+
+    start_date = (
+        datetime.strptime(start_str, "%Y-%m-%d").date()
+        if start_str else date(today.year, 1, 1)
+    )
+
+    end_date = (
+        datetime.strptime(end_str, "%Y-%m-%d").date()
+        if end_str else today
+    )
+
+    # ---------------------------------------------------
+    # Member Details
+    # ---------------------------------------------------
+
+    member = Member.query.filter_by(
+        member_no=member_no
+    ).first()
+
+    if not member:
+
+        flash("Member not found.", "danger")
+
+        return redirect(
+            url_for("admin.member_statement")
+        )
+
+    # ---------------------------------------------------
+    # Statement Data
+    # ---------------------------------------------------
+
+    statement, totals = get_member_statement(
+        member_no,
+        start_date,
+        end_date
+    )
+
+    if len(statement) == 0:
+
+        flash(
+            "No transactions found for the selected period.",
+            "warning"
+        )
+
+        return redirect(
+            url_for("admin.member_statement")
+        )
+
+    # ---------------------------------------------------
+    # PDF Setup
+    # ---------------------------------------------------
+
+    buffer = BytesIO()
+
+    filename = (
+        f"MEMBER_STATEMENT_"
+        f"{member.member_no}_"
+        f"{start_date}_TO_{end_date}.pdf"
+    )
+
+    doc = SimpleDocTemplate(
+
+        buffer,
+
+        pagesize=A4,
+
+        leftMargin=1.5 * cm,
+        rightMargin=1.5 * cm,
+
+        topMargin=2 * cm,
+        bottomMargin=2 * cm
+
+    )
+
+    styles = getSampleStyleSheet()
+
+    header_style = ParagraphStyle(
+
+        "header",
+
+        parent=styles["Heading1"],
+
+        fontSize=14,
+
+        textColor=colors.HexColor("#002060"),
+
+        alignment=TA_LEFT
+
+    )
+
+    sub_style = ParagraphStyle(
+
+        "sub",
+
+        parent=styles["Normal"],
+
+        fontSize=10,
+
+        textColor=colors.grey,
+
+        spaceAfter=3
+
+    )
+
+    story = []
+
+    # ===================================================
+    # (Logo + Header + Member Information)
+    # ===================================================
+    # PROFESSIONAL HEADER
+    # ======================================================
+
+    logo_path = current_app.root_path + "/static/img/logo.png"
+
+    try:
+        logo = Image(
+            logo_path,
+            width=2.8 * cm,
+            height=2.8 * cm
+        )
+    except Exception:
+        logo = Paragraph("LOGO", styles["Normal"])
+
+
+    header_info = [
+
+        [Paragraph(
+            "<b>PCEA CHAIRETE SACCO LTD</b>",
+            ParagraphStyle(
+                "sacco_name",
+                parent=styles["Heading2"],
+                fontSize=15,
+                textColor=colors.HexColor("#002060")
+            )
+        )],
+
+        [Paragraph(
+            "<b>MEMBER STATEMENT</b>",
+            ParagraphStyle(
+                "title",
+                parent=styles["Heading3"],
+                alignment=1
+            )
+        )],
+
+        [Paragraph(
+            f"<b>Member No :</b> {member.member_no}",
+            sub_style
+        )],
+
+        [Paragraph(
+            f"<b>Member Name :</b> {member.name}",
+            sub_style
+        )],
+
+        [Paragraph(
+            f"<b>Statement Period :</b> "
+            f"{start_date.strftime('%d-%b-%Y')} "
+            f"to "
+            f"{end_date.strftime('%d-%b-%Y')}",
+            sub_style
+        )],
+
+        [Paragraph(
+            f"<b>Generated :</b> "
+            f"{datetime.now().strftime('%d-%b-%Y %H:%M')}",
+            sub_style
+        )]
+
+    ]
+
+    header_table = Table(
+
+        [[logo, Table(header_info)]],
+
+        colWidths=[3 * cm, 14 * cm]
+
+    )
+
+    header_table.setStyle(TableStyle([
+
+        ('VALIGN', (0,0), (-1,-1), 'TOP'),
+
+        ('LEFTPADDING', (0,0), (-1,-1), 0),
+
+        ('RIGHTPADDING', (0,0), (-1,-1), 0),
+
+    ]))
+
+    story.append(header_table)
+
+    story.append(Spacer(1,10))
+
+    # ======================================================
+    # TRANSACTION TABLE
+    # ======================================================
+
+    table_data = [[
+
+        "Date",
+
+        "Deposit",
+
+        "Interest",
+
+        "Loan",
+
+        "Savings",
+
+        "Savings Balance",
+
+        "Loan Balance"
+
+    ]]
+
+    for row in statement:
+
+        # ------------------------------------------------
+        # Balance Brought Forward
+        # ------------------------------------------------
+        if row.get("description") == "Balance B/F":
+
+            table_data.append([
+
+                "Balance B/F",
+
+                "",
+
+                "",
+
+                "",
+
+                "",
+
+                f"{row['saving_balance']:,.2f}",
+
+                f"{row['loan_balance']:,.2f}"
+
+            ])
+
+        # ------------------------------------------------
+        # Normal transaction
+        # ------------------------------------------------
+        else:
+
+            table_data.append([
+
+                row["date"].strftime("%d-%b-%Y"),
+
+                f"{row['deposit']:,.2f}",
+
+                f"{row['interest']:,.2f}",
+
+                f"{row['loan']:,.2f}",
+
+                f"{row['savings']:,.2f}",
+
+                f"{row['saving_balance']:,.2f}"
+                if row["saving_balance"] is not None
+                else "",
+
+                f"{row['loan_balance']:,.2f}"
+                if row["loan_balance"] is not None
+                else ""
+
+            ])
+
+    table = Table(
+
+        table_data,
+
+        repeatRows=1,
+
+        colWidths=[
+
+            2.4 * cm,
+
+            2.7 * cm,
+
+            2.5 * cm,
+
+            2.5 * cm,
+
+            2.5 * cm,
+
+            3.0 * cm,
+
+            3.0 * cm
+
+        ]
+
+    )
+
+    table.setStyle(TableStyle([
+
+        ('BACKGROUND',(0,0),(-1,0),colors.HexColor("#002060")),
+
+        ('TEXTCOLOR',(0,0),(-1,0),colors.white),
+
+        ('FONTNAME',(0,0),(-1,0),'Helvetica-Bold'),
+
+        ('FONTSIZE',(0,0),(-1,-1),8),
+
+        ('GRID',(0,0),(-1,-1),0.25,colors.grey),
+
+        ('ALIGN',(1,1),(-1,-1),'RIGHT'),
+
+        ('VALIGN',(0,0),(-1,-1),'MIDDLE'),
+
+        ('ROWBACKGROUNDS',
+
+            (0,1),
+
+            (-1,-1),
+
+            [colors.white, colors.whitesmoke]
+
+        )
+
+    ]))
+
+    story.append(table)
+
+    story.append(Spacer(1,15))
+
+    # ======================================================
+    # PART C STARTS HERE
+    # ======================================================
+    # SUMMARY
+    # ======================================================
+
+    summary_data = [
+
+        ["Description", "Amount (KSh)"],
+
+        ["Total Deposits", f"{totals['deposit']:,.2f}"],
+
+        ["Interest Paid", f"{totals['interest']:,.2f}"],
+
+        ["Loan Paid", f"{totals['loan']:,.2f}"],
+
+        ["Savings Deposited", f"{totals['savings']:,.2f}"]
+
+    ]
+
+    summary_table = Table(
+        summary_data,
+        colWidths=[9*cm,5*cm]
+    )
+
+    summary_table.setStyle(TableStyle([
+
+        ('BACKGROUND',(0,0),(-1,0),colors.HexColor("#002060")),
+
+        ('TEXTCOLOR',(0,0),(-1,0),colors.white),
+
+        ('FONTNAME',(0,0),(-1,0),'Helvetica-Bold'),
+
+        ('FONTNAME',(0,1),(-1,-1),'Helvetica'),
+
+        ('GRID',(0,0),(-1,-1),0.25,colors.grey),
+
+        ('ALIGN',(1,1),(-1,-1),'RIGHT'),
+
+        ('BOTTOMPADDING',(0,0),(-1,0),8)
+
+    ]))
+
+    story.append(summary_table)
+
+    story.append(Spacer(1,20))
+
+    # ======================================================
+    # SIGNATURES
+    # ======================================================
+
+    signature_table = Table(
+
+        [[
+
+            "Prepared By\n\n________________________",
+
+            "Verified By\n\n________________________"
+
+        ]],
+
+        colWidths=[8*cm,8*cm]
+
+    )
+
+    signature_table.setStyle(TableStyle([
+
+        ('FONTNAME',(0,0),(-1,-1),'Helvetica'),
+
+        ('FONTSIZE',(0,0),(-1,-1),10),
+
+        ('TOPPADDING',(0,0),(-1,-1),15)
+
+    ]))
+
+    story.append(signature_table)
+
+    story.append(Spacer(1,20))
+
+    story.append(
+
+        Paragraph(
+
+            "<font size='8'>This is a computer generated statement and does not require a signature.</font>",
+
+            styles["Normal"]
+
+        )
+
+    )
+
+    # ======================================================
+    # FOOTER
+    # ======================================================
+
+    def add_footer(canvas, doc):
+
+        canvas.saveState()
+
+        canvas.setFont("Helvetica",8)
+
+        canvas.setFillColor(colors.grey)
+
+        canvas.drawString(
+
+            1.5*cm,
+
+            1.2*cm,
+
+            f"Generated on {datetime.now().strftime('%d-%b-%Y %H:%M')}"
+
+        )
+
+        canvas.drawRightString(
+
+            A4[0]-1.5*cm,
+
+            1.2*cm,
+
+            f"Page {canvas.getPageNumber()}"
+
+        )
+
+        canvas.restoreState()
+
+    # ======================================================
+    # BUILD PDF
+    # ======================================================
+
+    doc.build(
+
+        story,
+
+        onFirstPage=add_footer,
+
+        onLaterPages=add_footer
+
+    )
+
+    buffer.seek(0)
+
+    return send_file(
+
+        buffer,
+
+        as_attachment=True,
+
+        download_name=filename,
+
+        mimetype="application/pdf"
+
+    )
+    
+from io import BytesIO
+
+from flask import send_file
+
+from reportlab.lib import colors
+from reportlab.lib.enums import TA_CENTER
+from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.lib.units import inch
+
+from reportlab.platypus import (
+    SimpleDocTemplate,
+    Paragraph,
+    Spacer,
+    Table,
+    TableStyle
+)
+
+def generate_member_statement_pdf(
+        member,
+        from_date,
+        to_date,
+        statement,
+        totals):
+
+    buffer = BytesIO()
+
+    doc = SimpleDocTemplate(
+        buffer,
+        pagesize=A4,
+        rightMargin=20,
+        leftMargin=20,
+        topMargin=20,
+        bottomMargin=20
+    )
+
+    styles = getSampleStyleSheet()
+
+    elements = []
+
+    title_style = styles["Heading1"]
+    title_style.alignment = TA_CENTER
+
+    elements.append(
+        Paragraph(
+            "MEMBER STATEMENT",
+            title_style
+        )
+    )
+
+    elements.append(Spacer(1, 0.25 * inch))
+
+    elements.append(
+        Paragraph(
+            f"<b>Member No:</b> {member.member_no}",
+            styles["Normal"]
+        )
+    )
+
+    elements.append(
+        Paragraph(
+            f"<b>Name:</b> {member.name}",
+            styles["Normal"]
+        )
+    )
+
+    elements.append(
+        Paragraph(
+            f"<b>Statement Period:</b> "
+            f"{from_date.strftime('%d-%b-%Y')} "
+            f"to "
+            f"{to_date.strftime('%d-%b-%Y')}",
+            styles["Normal"]
+        )
+    )
+
+    elements.append(Spacer(1, 0.25 * inch))
+
+    data = [[
+        "Date",
+        "Deposit",
+        "Interest",
+        "Loan",
+        "Savings",
+        "Savings Bal",
+        "Loan Bal"
+    ]]
+
+    for row in statement:
+
+        data.append([
+
+            row["date"].strftime("%d-%b-%Y"),
+
+            f"{row['deposit']:,.2f}",
+
+            f"{row['interest']:,.2f}",
+
+            f"{row['loan']:,.2f}",
+
+            f"{row['savings']:,.2f}",
+
+            f"{row['saving_balance']:,.2f}"
+                if row["saving_balance"] is not None
+                else "",
+
+            f"{row['loan_balance']:,.2f}"
+                if row["loan_balance"] is not None
+                else ""
+
+        ])
+
+    data.append([
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+    ])
+
+    data.append([
+        "TOTALS",
+        f"{totals['deposit']:,.2f}",
+        f"{totals['interest']:,.2f}",
+        f"{totals['loan']:,.2f}",
+        f"{totals['savings']:,.2f}",
+        "",
+        ""
+    ])
+
+    table = Table(data,repeatRows=1)
+
+    table.setStyle(TableStyle([
+
+        ("BACKGROUND",(0,0),(-1,0),colors.darkblue),
+
+        ("TEXTCOLOR",(0,0),(-1,0),colors.white),
+
+        ("GRID",(0,0),(-1,-1),0.5,colors.grey),
+
+        ("FONTNAME",(0,0),(-1,0),"Helvetica-Bold"),
+
+        ("ALIGN",(1,1),(-1,-1),"RIGHT"),
+
+        ("BOTTOMPADDING",(0,0),(-1,0),8),
+
+    ]))
+
+    elements.append(table)
+
+    doc.build(elements)
+
+    buffer.seek(0)
+
+    return send_file(
+
+        buffer,
+
+        as_attachment=True,
+
+        download_name=f"{member.member_no}_statement.pdf",
+
+        mimetype="application/pdf"
+
+    )
 # ---------- Savings Statement (PDF) ----------
 @admin_bp.route('/reports/savings-statement', methods=['GET'])
 @login_required
@@ -1925,24 +2842,15 @@ def savings_statement_form():
 @admin_bp.route('/reports/savings-statement/pdf', methods=['POST', 'GET'])
 @login_required
 def savings_statement_pdf():
-    """
-    Generates a professional SACCO savings statement PDF with logo, header, and signature section.
-    """
-    from sacco_app.models import Member, SaccoAccount, Transaction
     from sqlalchemy import and_
     from flask import current_app, send_file
-    from decimal import Decimal
     from io import BytesIO
-    from datetime import datetime, date
     from reportlab.lib.pagesizes import A4
     from reportlab.lib import colors
     from reportlab.lib.units import cm
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-    from reportlab.platypus import (
-        SimpleDocTemplate, Paragraph, Table, TableStyle, Spacer, Image
-    )
+    from reportlab.platypus import (SimpleDocTemplate, Paragraph, Table, TableStyle, Spacer, Image )
     from reportlab.lib.enums import TA_LEFT, TA_RIGHT, TA_CENTER
-
     # --- Parameters
     member_no = (request.values.get('member_no') or '').strip()
     start_str = request.values.get('start_date')
@@ -1952,7 +2860,6 @@ def savings_statement_pdf():
     if not member_no:
         flash("Member number is required.", "warning")
         return redirect(url_for('admin.savings_statement_form'))
-
     start_date = datetime.strptime(start_str, "%Y-%m-%d").date() if start_str else date(today.year, 1, 1)
     end_date = datetime.strptime(end_str, "%Y-%m-%d").date() if end_str else today
 
@@ -1967,7 +2874,6 @@ def savings_statement_pdf():
         return redirect(url_for('admin.savings_statement_form'))
 
     account_no = savings_acc.account_number
-
     # --- Opening balance before period
     txns_before = Transaction.query.filter(
         Transaction.account_no == account_no,
@@ -1983,8 +2889,7 @@ def savings_statement_pdf():
         Transaction.account_no == account_no,
         and_(
             Transaction.bank_txn_date >= datetime.combine(start_date, datetime.min.time()),
-            Transaction.bank_txn_date <= datetime.combine(end_date, datetime.max.time())
-        )
+            Transaction.bank_txn_date <= datetime.combine(end_date, datetime.max.time())   )
     ).order_by(Transaction.bank_txn_date.asc(), Transaction.id.asc()).all()
 
     rows = []
@@ -2002,11 +2907,7 @@ def savings_statement_pdf():
         total_debits += dr
         total_credits += cr
         rows.append([
-            t.bank_txn_date.strftime("%Y-%m-%d"),
-            safe(t.narration),
-            fmt(dr) if dr else "",
-            fmt(cr) if cr else "",
-            fmt(run_bal)
+            t.bank_txn_date.strftime("%Y-%m-%d"),safe(t.narration),fmt(dr) if dr else "",fmt(cr) if cr else "",fmt(run_bal)
         ])
 
     closing_balance = opening_balance + total_credits - total_debits
@@ -2044,10 +2945,7 @@ def savings_statement_pdf():
         [Paragraph(f"<b>Period:</b> {start_date} to {end_date}", sub_style)],
     ]
 
-    header_table = Table(
-        [[logo, Table(header_info, colWidths=[11 * cm])]],
-        colWidths=[3 * cm, 12 * cm]
-    )
+    header_table = Table([[logo, Table(header_info, colWidths=[11 * cm])]],colWidths=[3 * cm, 12 * cm]    )
     header_table.setStyle(TableStyle([
         ('VALIGN', (0, 0), (-1, -1), 'TOP'),
         ('ALIGN', (1, 0), (1, -1), 'LEFT'),
@@ -2060,15 +2958,13 @@ def savings_statement_pdf():
 
     # --- Divider line
     story.append(Table([[""]], colWidths=[20 * cm], style=[
-        ('LINEBELOW', (0, 0), (-1, -1), 0.75, colors.HexColor("#004080"))
-    ]))
+        ('LINEBELOW', (0, 0), (-1, -1), 0.75, colors.HexColor("#004080"))    ]))
     story.append(Spacer(1, 5))
 
     # --- Section title
     story.append(Paragraph("<b>Member Savings Statement</b>", ParagraphStyle(
         "section_title", fontSize=12, leading=14, textColor=colors.HexColor("#002060"), alignment=TA_CENTER
     )))
-
     # --- Transaction table
     data = [["Date", "Narration", "Debit (KSh)", "Credit (KSh)", "Balance (KSh)"]]
     data.extend(rows if rows else [["", "No transactions in this period.", "", "", ""]])
@@ -2081,21 +2977,17 @@ def savings_statement_pdf():
         ('GRID', (0, 0), (-1, -1), 0.25, colors.grey),
         ('ALIGN', (2, 1), (-1, -1), 'RIGHT'),
         ('VALIGN', (0, 0), (-1, -1), 'TOP'),
-        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.whitesmoke, colors.white])
-    ]))
+        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.whitesmoke, colors.white])    ]))
     story.append(tx_table)
     story.append(Spacer(1, 20))
-
     # --- Signature section
     sig_data = [["Prepared By: ______________________", "Verified By: ______________________"]]
     sig_table = Table(sig_data, colWidths=[7 * cm, 7 * cm])
     sig_table.setStyle(TableStyle([
         ('FONT', (0, 0), (-1, -1), 'Helvetica', 10),
         ('TOPPADDING', (0, 0), (-1, -1), 15),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 15),
-    ]))
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 15),    ]))
     story.append(sig_table)
-
     # --- Footer
     def add_footer(canvas, doc):
         canvas.saveState()
@@ -2107,9 +2999,7 @@ def savings_statement_pdf():
         canvas.setFillColorRGB(0.9, 0.9, 0.9)
         canvas.drawCentredString(A4[0]/2, A4[1]/2, "CONFIDENTIAL")
         canvas.restoreState()
-
     doc.build(story, onFirstPage=add_footer, onLaterPages=add_footer)
-
     buffer.seek(0)
     return send_file(buffer, as_attachment=True, download_name=filename, mimetype='application/pdf')
 
