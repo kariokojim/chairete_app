@@ -89,15 +89,15 @@ Member Statement
 
                         <tr>
 
-                            <th>Date</th>
+                            <th>Date of Deposit</th>
 
-                            <th class="text-end">Deposit</th>
+                            <th class="text-end">Banked Deposit</th>
 
-                            <th class="text-end">Interest</th>
+                            <th class="text-end">Interest Paid</th>
 
-                            <th class="text-end">Loan</th>
+                            <th class="text-end">Loan Paid</th>
 
-                            <th class="text-end">Savings</th>
+                            <th class="text-end">Amount Saved</th>
 
                             <th class="text-end">Savings Balance</th>
 
@@ -143,11 +143,27 @@ Member Statement
 
                         <tr>
 
-                            <td>
+							<td>
 
-                                {{ row.date.strftime("%d-%b-%Y") }}
+							{% if row.description == "Balance B/F" %}
 
-                            </td>
+								Balance B/F
+
+							{% else %}
+
+							<a href="#"
+
+							   class="statement-link"
+
+							   data-reference="{{ row.reference }}">
+
+								{{ row.date.strftime("%d-%b-%Y") }}
+
+							</a>
+
+							{% endif %}
+
+							</td>
 
                             <td class="text-end">
 
@@ -285,4 +301,127 @@ Member Statement
 
 </div>
 
+<div class="modal fade"
+
+     id="transactionModal"
+
+     tabindex="-1">
+
+    <div class="modal-dialog modal-lg">
+
+        <div class="modal-content">
+
+            <div class="modal-header bg-primary text-white">
+
+                <h5 class="modal-title">
+
+                    Transaction Details
+
+                </h5>
+
+                <button
+
+                    type="button"
+
+                    class="btn-close btn-close-white"
+
+                    data-bs-dismiss="modal">
+
+                </button>
+
+            </div>
+
+            <div class="modal-body">
+
+                <table class="table table-bordered table-sm">
+
+                    <thead>
+
+                        <tr>
+
+                            <th>Description</th>
+
+                            <th>GL Account</th>
+
+                            <th class="text-end">Debit</th>
+
+                            <th class="text-end">Credit</th>
+
+                        </tr>
+
+                    </thead>
+
+                    <tbody id="detailBody">
+
+                    </tbody>
+
+                </table>
+
+            </div>
+
+        </div>
+
+    </div>
+
+</div>
+
+<script>
+
+$(".statement-link").click(function(e){
+
+    e.preventDefault();
+
+    let reference=$(this).data("reference");
+
+    $.getJSON(
+
+        "/admin/reports/member-statement/details/"+reference,
+
+        function(rows){
+
+            let html="";
+
+            rows.forEach(function(r){
+
+                html+=`
+
+                <tr>
+
+                    <td>${r.description}</td>
+
+                    <td>${r.gl_account}</td>
+
+                    <td class="text-end">
+
+                        ${Number(r.debit).toLocaleString()}
+
+                    </td>
+
+                    <td class="text-end">
+
+                        ${Number(r.credit).toLocaleString()}
+
+                    </td>
+
+                </tr>
+
+                `;
+
+            });
+
+            $("#detailBody").html(html);
+
+            new bootstrap.Modal(
+
+                document.getElementById("transactionModal")
+
+            ).show();
+
+        }
+
+    );
+
+});
+
+</script>
 {% endblock %}

@@ -109,38 +109,37 @@ Member Statement
     </div>
 
 </div>
-
 <script>
 
-$("#member_no").keyup(function(){
+$(document).ready(function () {
 
-    let member_no = $(this).val();
+    $("#member_no").on("keyup", function () {
 
-    if(member_no.length < 2)
-        return;
+        let member_no = $(this).val().trim();
 
-    $.getJSON(
-        "/member_lookup/" + member_no,
-
-        function(data){
-
-            if(data.status=="OK"){
-
-                $("#member_name").val(data.member_name);
-
-            }
-            else{
-
-                $("#member_name").val("");
-
-            }
-
+        if (member_no.length < 2) {
+            $("#member_name").val("");
+            return;
         }
 
-    );
+        let lookupUrl = "{{ url_for('admin.lookup_member', member_no='MEMBERNO') }}";
+        lookupUrl = lookupUrl.replace("MEMBERNO", member_no);
+
+        $.getJSON(lookupUrl, function (data) {
+
+            if (data.found) {
+                $("#member_name").val(data.name);
+            } else {
+                $("#member_name").val("");
+            }
+
+        }).fail(function () {
+            $("#member_name").val("");
+        });
+
+    });
 
 });
 
 </script>
-
 {% endblock %}
