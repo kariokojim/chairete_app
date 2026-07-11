@@ -1917,8 +1917,16 @@ def member_statement():
 
     form = MemberStatementForm()
 
+    today = date.today()
+
+    # Default From Date: 1st January of current year
+    form.from_date.data = date(today.year, 1, 1)
+
+    # Default To Date: Today
+    form.to_date.data = today
+
     return render_template(
-        'admin/member_statement.html',
+        "admin/member_statement.html",
         form=form
     )
 
@@ -2149,6 +2157,40 @@ def member_statement_view():
         statement=statement,
         totals=totals
     )
+    
+    
+##view individual transactions
+
+@admin_bp.route('/reports/member-statement/details/<reference>')
+@login_required
+def member_statement_details(reference):
+
+    transactions = (
+        Transaction.query
+        .filter_by(reference=reference)
+        .order_by(Transaction.id.asc())
+        .all()
+    )
+
+    rows = []
+
+    for t in transactions:
+
+        rows.append({
+
+            "date": t.bank_txn_date.strftime("%d-%b-%Y"),
+
+            "description": t.narration,
+
+            "gl_account": t.gl_account,
+
+            "debit": float(t.debit_amount or 0),
+
+            "credit": float(t.credit_amount or 0)
+
+        })
+
+    return jsonify(rows)    
 ####new pdf code 
 
 
