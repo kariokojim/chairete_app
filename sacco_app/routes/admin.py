@@ -2053,6 +2053,8 @@ def get_member_statement(member_no, from_date, to_date):
             credit = float(p.credit_amount or 0)
 
             # Total amount received for this reference
+            amount_deposited+= credit        
+
 
             if p.gl_account == "MEMBER_INTEREST":
                 interest_paid += debit
