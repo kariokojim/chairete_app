@@ -2066,8 +2066,8 @@ def get_member_statement(member_no, from_date, to_date):
                 if credit > 0:
                     amount_deposited+=credit
                     savings_deposit = credit
-                elif debit >0:
-                    amount_deposited=0.0
+                elif debit > 0.00:
+                    amount_deposited = 0.00
                     savings_deposit = -debit
                 if p.running_balance is not None:
                     savings_balance = float(p.running_balance)
