@@ -2103,44 +2103,54 @@ def get_member_statement(member_no, from_date, to_date):
 
     else:
 
-        # No repayments before statement.
-        # Use current loan balance.
-        current_balance = (
-            db.session.query(
-                db.func.coalesce(
-                    db.func.sum(Loan.balance),
-                    0
-                )
-            )
+        # Get the latest active loan
+        loan = (
+            Loan.query
             .filter(
                 Loan.member_no == member_no,
                 Loan.status == "Active"
             )
-            .scalar()
+            .order_by(
+                Loan.disbursed_date.desc()
+            )
+            .first()
         )
 
-        # Principal repaid during statement period
-        principal_paid = (
-            db.session.query(
-                db.func.coalesce(
-                    db.func.sum(Transaction.debit_amount),
-                    0
+        if loan:
+
+            # Loan did not exist at the beginning of the statement
+            if loan.disbursed_date > from_date:
+
+                opening_loan_balance = 0.00
+
+            else:
+
+                current_balance = float(loan.balance or 0)
+
+                principal_paid = (
+                    db.session.query(
+                        db.func.coalesce(
+                            db.func.sum(Transaction.debit_amount),
+                            0
+                        )
+                    )
+                    .filter(
+                        Transaction.member_no == member_no,
+                        Transaction.gl_account == "MEMBER_LOAN",
+                        Transaction.bank_txn_date >= from_date,
+                        Transaction.bank_txn_date <= to_date
+                    )
+                    .scalar()
                 )
-            )
-            .filter(
-                Transaction.member_no == member_no,
-                Transaction.gl_account == "MEMBER_LOAN",
-                Transaction.bank_txn_date >= from_date,
-                Transaction.bank_txn_date <= to_date
-            )
-            .scalar()
-        )
 
-        opening_loan_balance = (
-            float(current_balance)
-            + float(principal_paid)
-        )
-    
+                opening_loan_balance = (
+                    current_balance +
+                    float(principal_paid)
+                )
+
+        else:
+
+            opening_loan_balance = 0.00    
     last_savings_balance = opening_savings_balance
     last_loan_balance = opening_loan_balance
     
@@ -2214,7 +2224,13 @@ def get_member_statement(member_no, from_date, to_date):
         savings_balance = None
         loan_balance = None
 
-        amount_deposited = 0.0
+        amount_deposited = 0.0 
+        
+        loan_disbursed = any(
+                    x.gl_account == "MEMBER_LOAN"
+                    and float(x.credit_amount or 0) > 0
+                    for x in postings
+                )
 
         for p in postings:
 
@@ -2227,10 +2243,18 @@ def get_member_statement(member_no, from_date, to_date):
 
             # Principal repayment
             elif p.gl_account == "MEMBER_LOAN":
-                loan_paid += debit
+                # Loan repayment
+                if debit > 0:
+                    loan_paid += debit
+
+                # Loan disbursement
+                elif credit > 0:
+                    loan_balance = float(p.running_balance or 0)
 
                 if p.running_balance is not None:
                     loan_balance = float(p.running_balance)
+
+     
 
             # Member savings account
             elif p.gl_account == "SAVINGS":
@@ -2298,7 +2322,9 @@ def get_member_statement(member_no, from_date, to_date):
             amount_deposited == 0
             and loan_paid == 0
             and interest_paid == 0
-            and savings_deposit == 0
+            and savings_deposit == 0    
+            and not loan_disbursed
+
         ):
             continue
 
