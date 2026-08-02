@@ -668,7 +668,53 @@ def disburse_loan():
             loan_period = int(form.loan_period.data)
             loan_type = (getattr(form, 'loan_type', None).data or 'normal').lower().strip()
             guarantors = parse_guarantors(request.form)
+            # ---------------- GUARANTOR VALIDATION ----------------
+            if not guarantors:
+                flash("At least one guarantor is required.", "danger")
+                return render_template('admin/disburse_loan.html', form=form)
 
+            total_guaranteed = sum(
+                g["amount_guaranteed"] for g in guarantors
+            )
+
+            if total_guaranteed < loan_amount:
+                flash(
+                    f"Loan is not fully guaranteed. "
+                    f"Guaranteed: {total_guaranteed:,.2f} "
+                    f"Required: {loan_amount:,.2f}",
+                    "danger"
+                )
+                return render_template('admin/disburse_loan.html', form=form)
+            guarantor_numbers = [g["member_no"] for g in guarantors]
+
+            if len(guarantor_numbers) != len(set(guarantor_numbers)):
+                flash("A guarantor has been selected more than once.", "danger")
+                return render_template('admin/disburse_loan.html', form=form)
+            # ---------------- GUARANTOR SAVINGS VALIDATION ----------------
+            for g in guarantors:
+
+                guarantor_savings = SaccoAccount.query.filter_by(
+                    member_no=g["member_no"],
+                    account_type="SAVINGS"
+                ).first()
+
+                savings_balance = (
+                    guarantor_savings.balance
+                    if guarantor_savings
+                    else Decimal("0.00")
+                )
+
+                if g["amount_guaranteed"] > savings_balance:
+                    flash(
+                        f"Guarantor {g['member_no']} cannot guarantee "
+                        f"{g['amount_guaranteed']:,.2f}. "
+                        f"Available savings: {savings_balance:,.2f}.",
+                        "danger"
+                    )
+                    return render_template(
+                        "admin/disburse_loan.html",
+                        form=form
+                    )
             # ---------------- CONSTANTS ----------------
             PROCESSING_FEE_RATE = Decimal('0.005')   # 0.5%
             INSURANCE_RATE = Decimal('0.015')        # 1.5%
@@ -707,14 +753,42 @@ def disburse_loan():
                 Loan.status.in_(["Active", "Disbursed"]),
                 Loan.balance > 0
             ).first()
+            
+            # ---------------- TOP-UP DEFAULTS ----------------
+            settlement_amount = Decimal("0.00")
+            interest_due = Decimal("0.00")
+                        
 
             if loan_type != 'topup' and active_loan:
                 flash("Member already has an active loan.", "danger")
                 return render_template('admin/disburse_loan.html', form=form)
+            if loan_type == 'topup':
 
-            if loan_type == 'topup' and not active_loan:
-                flash("No active loan to top-up.", "danger")
-                return render_template('admin/disburse_loan.html', form=form)
+                if not active_loan:
+                    flash("No active loan to top-up.", "danger")
+                    return render_template('admin/disburse_loan.html', form=form)
+
+                settlement_amount = active_loan.balance
+
+                interest_due = LoanSchedule.query.filter(
+                    LoanSchedule.loan_no == active_loan.loan_no,
+                    LoanSchedule.status == "DUE"
+                ).with_entities(
+                    db.func.sum(
+                        LoanSchedule.interest_due - LoanSchedule.interest_paid
+                    )
+                ).scalar() or Decimal("0.00")
+
+                settlement_amount += Decimal(str(interest_due))
+
+                if loan_amount <= settlement_amount:
+                    flash("Top-up amount must exceed outstanding balance.", "danger")
+                    return render_template('admin/disburse_loan.html', form=form)
+            if loan_type == "topup":
+                net_disbursed = (
+                    loan_amount-settlement_amount-processing_fee).quantize(Decimal("0.01"))
+            else:
+                net_disbursed = (loan_amount- processing_fee).quantize(Decimal("0.01"))
 
             # ---------------- GL ACCOUNTS ----------------
             gl_cash = SaccoAccount.query.filter_by(account_number='M000GL_CASH').first()
@@ -758,23 +832,55 @@ def disburse_loan():
             loan_no = f"LN{(last_loan.id + 1) if last_loan else 1:04d}"
 
             # ---------------- CREATE LOAN ----------------
+            # ---------------- CREATE LOAN ----------------
             new_loan = Loan(
-                loan_no=loan_no,
-                member_no=member_no,
-                loan_account=loan_acct_no,
-                interest_account=int_acct_no,
-                loan_amount=loan_amount,
-                loan_period=loan_period,
-                balance=loan_amount,
-                interest_rate=ANNUAL_RATE,
-                status='Active',
-                disbursed_by=current_user.id,
-                created_at=datetime.now(),
-                disbursed_date=datetime.now().date(),
-                loan_type=loan_type
-            )
+            loan_no=loan_no,
+            member_no=member_no,
+            loan_account=loan_acct_no,
+            interest_account=int_acct_no,
+            loan_amount=loan_amount,
+            is_topup=(loan_type == "topup"),      
+            topup_from_loan=active_loan.loan_no if active_loan else None, 
+            settlement_amount=settlement_amount if loan_type=="topup" else Decimal("0.00"),
+            net_disbursed=net_disbursed,
+            loan_period=loan_period,
+            balance=loan_amount,
+            interest_rate=ANNUAL_RATE,
+            status='Active',
+            disbursed_by=current_user.id,
+            created_at=datetime.now(),
+            disbursed_date=datetime.now().date(),
+            loan_type=loan_type        )
+
             db.session.add(new_loan)
-            db.session.flush()
+            db.session.flush()      # <-- new loan now exists in DB session
+
+            # ---------------- TOP-UP PROCESS ----------------
+            if loan_type == "topup":
+
+                active_loan.status = "TOPPED_UP"
+
+                active_loan.balance -= settlement_amount
+
+                if active_loan.balance <= Decimal("0.00"):
+                    active_loan.balance = Decimal("0.00")
+                active_loan.closed_date = datetime.now().date()
+
+                active_loan.closed_by = current_user.id    
+
+                # Close old repayment schedule
+                old_schedule = LoanSchedule.query.filter(
+                LoanSchedule.loan_no == active_loan.loan_no,
+                LoanSchedule.status == "DUE"
+                ).all()
+
+                for s in old_schedule:
+
+                    principal_remaining = s.principal_due - s.principal_paid
+                    interest_remaining = s.interest_due - s.interest_paid
+                    s.principal_paid += principal_remaining
+                    s.interest_paid += interest_remaining
+                    s.status = "SETTLED_TOPUP"
 
             # ---------------- SAVE GUARANTORS ----------------
             for g in guarantors:
@@ -788,11 +894,29 @@ def disburse_loan():
             # ---------------- GL POSTINGS ----------------
             txn_ref = f"TXN{uuid.uuid4().hex[:10].upper()}"
 
+            # 1. Create the new loan
             loan_acct.balance += loan_amount
             gl_loan_control.balance += loan_amount
-            gl_fee_income.balance += processing_fee
-            gl_cash.balance -= net_disbursed
 
+            # 2. Processing fee income
+            gl_fee_income.balance += processing_fee
+
+            # 3. Top-up settlement
+            if loan_type == "topup":
+
+                # Reduce the new loan account by the amount used to clear
+                # the previous loan.
+
+                # Clear the previous loan account
+                old_loan_acct = SaccoAccount.query.filter_by(
+                    account_number=active_loan.loan_account
+                ).first()
+
+                if old_loan_acct:
+                    old_loan_acct.balance -= settlement_amount
+
+            # 4. Cash paid to customer
+            gl_cash.balance -= net_disbursed
             # ---------------- EMI CALCULATION ----------------
             if monthly_rate > 0:
                 emi = (loan_amount * monthly_rate * (1 + monthly_rate) ** loan_period) / \
@@ -1952,7 +2076,11 @@ def get_member_statement(member_no, from_date, to_date):
         float(opening_savings.running_balance)
         if opening_savings else 0.00
     )
-    opening_loan = (
+# ==========================================================
+# OPENING LOAN BALANCE
+# ==========================================================
+
+    opening_loan_txn = (
         Transaction.query
         .filter(
             Transaction.member_no == member_no,
@@ -1966,10 +2094,52 @@ def get_member_statement(member_no, from_date, to_date):
         .first()
     )
 
-    opening_loan_balance = (
-        float(opening_loan.running_balance)
-        if opening_loan else 0.00
-    )
+    if opening_loan_txn:
+
+        # Last repayment before statement
+        opening_loan_balance = float(
+            opening_loan_txn.running_balance or 0
+        )
+
+    else:
+
+        # No repayments before statement.
+        # Use current loan balance.
+        current_balance = (
+            db.session.query(
+                db.func.coalesce(
+                    db.func.sum(Loan.balance),
+                    0
+                )
+            )
+            .filter(
+                Loan.member_no == member_no,
+                Loan.status == "Active"
+            )
+            .scalar()
+        )
+
+        # Principal repaid during statement period
+        principal_paid = (
+            db.session.query(
+                db.func.coalesce(
+                    db.func.sum(Transaction.debit_amount),
+                    0
+                )
+            )
+            .filter(
+                Transaction.member_no == member_no,
+                Transaction.gl_account == "MEMBER_LOAN",
+                Transaction.bank_txn_date >= from_date,
+                Transaction.bank_txn_date <= to_date
+            )
+            .scalar()
+        )
+
+        opening_loan_balance = (
+            float(current_balance)
+            + float(principal_paid)
+        )
     
     last_savings_balance = opening_savings_balance
     last_loan_balance = opening_loan_balance
@@ -2001,7 +2171,7 @@ def get_member_statement(member_no, from_date, to_date):
     )
 
     statement = []
-    
+
     statement.append({
 
     "description": "Balance B/F",
@@ -2034,14 +2204,13 @@ def get_member_statement(member_no, from_date, to_date):
     last_loan_balance = opening_loan_balance
 
     for reference, postings in sorted_groups:
-
         deposit_date = postings[0].bank_txn_date
 
         interest_paid = 0.0
         loan_paid = 0.0
         savings_deposit = 0.0
+        savings_withdrawal = 0.0
 
-        # None means "no posting for this account"
         savings_balance = None
         loan_balance = None
 
@@ -2052,28 +2221,67 @@ def get_member_statement(member_no, from_date, to_date):
             debit = float(p.debit_amount or 0)
             credit = float(p.credit_amount or 0)
 
-            # Total amount received for this reference
-            amount_deposited+= credit        
-
-
-            if p.gl_account == "MEMBER_INTEREST":
+            # Interest repayment
+            if p.gl_account in ("MEMBER_INTEREST"):
                 interest_paid += debit
 
+            # Principal repayment
             elif p.gl_account == "MEMBER_LOAN":
                 loan_paid += debit
-                loan_balance = float(p.running_balance or 0)
 
+                if p.running_balance is not None:
+                    loan_balance = float(p.running_balance)
+
+            # Member savings account
             elif p.gl_account == "SAVINGS":
+
                 if credit > 0:
-                    amount_deposited+= credit
+                    # Normal deposit into savings
+                    amount_deposited = credit
                     savings_deposit = credit
-                elif debit > 0.00:
-                    amount_deposited = 0.00
+
+                elif debit > 0:
+                    # Loan paid from existing savings
+                    amount_deposited = 0
+                    savings_withdrawal = debit
                     savings_deposit = -debit
+
                 if p.running_balance is not None:
                     savings_balance = float(p.running_balance)
 
-        # Carry forward balances if there was no posting
+        # ------------------------------------------------------------------
+        # BUSINESS RULES
+        # ------------------------------------------------------------------
+
+        # Case 1
+        # Deposit went entirely to loan & interest
+        # (No savings movement)
+        if (
+            amount_deposited == 0
+            and savings_withdrawal == 0
+            and (loan_paid > 0 or interest_paid > 0)
+        ):
+            amount_deposited = loan_paid + interest_paid
+
+
+        # Case 2
+        # Deposit partly paid loan and remainder went to savings
+        elif amount_deposited >0: 
+            amount_deposited = (
+                loan_paid
+                + interest_paid
+                + savings_deposit
+            )
+                   
+
+        # Case 3
+        # Loan paid from existing savings
+        elif savings_withdrawal > 0:
+            amount_deposited = 0
+            savings_deposit = -savings_withdrawal
+
+
+        # Carry balances forward
         if savings_balance is None:
             savings_balance = last_savings_balance
         else:
@@ -2084,36 +2292,34 @@ def get_member_statement(member_no, from_date, to_date):
         else:
             last_loan_balance = loan_balance
 
-        # Ignore empty references
-        if amount_deposited == 0:
+
+        # Skip empty references
+        if (
+            amount_deposited == 0
+            and loan_paid == 0
+            and interest_paid == 0
+            and savings_deposit == 0
+        ):
             continue
 
         total_deposit += amount_deposited
         total_interest += interest_paid
         total_loan += loan_paid
         total_savings += savings_deposit
-        
-        
+
         statement.append({
 
             "date": deposit_date,
-
             "reference": reference,
-
             "deposit": amount_deposited,
-
             "interest": interest_paid,
-
             "loan": loan_paid,
-
             "savings": savings_deposit,
-
             "saving_balance": savings_balance,
-
             "loan_balance": loan_balance
 
         })
-
+        
     totals = {
         "deposit": total_deposit,
         "interest": total_interest,
@@ -4692,7 +4898,7 @@ def normalize_member_no(tx_details: str) -> str:
     text = tx_details.upper().replace("O", "0")
 
     # STRICT: must follow # or ~
-    match = re.search(r"[#~](M?\d{2,5})\b", text)
+    match = re.search(r"[#~ ](M?\d{2,5})\b", text)
     if not match:
         return ""
 
