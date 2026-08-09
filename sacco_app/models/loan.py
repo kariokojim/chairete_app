@@ -68,6 +68,10 @@ class Loan(db.Model):
     schedules = db.relationship('LoanSchedule', back_populates='loan', cascade='all, delete-orphan')
     interests = db.relationship('LoanInterest', backref='loan', lazy=True)
     member = db.relationship('Member', back_populates='loans', lazy=True)
+    topup_from_loan = db.Column(db.String(20))
+    is_topup = db.Column(db.Boolean, default=False)
+    settlement_amount = db.Column(db.Numeric(18,2), default=0)
+    net_disbursed = db.Column(db.Numeric(18,2), default=0)
 
 
 # =========================
