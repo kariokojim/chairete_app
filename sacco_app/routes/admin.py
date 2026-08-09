@@ -832,7 +832,6 @@ def disburse_loan():
             loan_no = f"LN{(last_loan.id + 1) if last_loan else 1:04d}"
 
             # ---------------- CREATE LOAN ----------------
-            # ---------------- CREATE LOAN ----------------
             new_loan = Loan(
             loan_no=loan_no,
             member_no=member_no,
@@ -854,6 +853,52 @@ def disburse_loan():
 
             db.session.add(new_loan)
             db.session.flush()      # <-- new loan now exists in DB session
+            import uuid
+
+            txn_no = f"TXN{uuid.uuid4().hex[:10].upper()}"
+            today = datetime.now()
+
+            # -----------------------------------------------------
+            # Debit Member Loan Account
+            # -----------------------------------------------------
+            loan_txn = Transaction(
+                txn_no=f"TXN{uuid.uuid4().hex[:10].upper()}",
+                member_no=member_no,
+                account_no=loan_acct_no,
+                gl_account="MEMBER_LOAN",
+                debit_amount=Decimal("0.00"),
+                credit_amount=loan_amount,
+                running_balance=loan_amount,
+                reference=txn_no,
+                narration=f"Loan disbursement - {loan_no}",
+                bank_txn_date=today,
+                tran_type="LOAN_DISBURSEMENT",
+                posted_by=current_user.username,
+                created_at=today
+            )
+
+            db.session.add(loan_txn)
+
+            # -----------------------------------------------------
+            # Credit Cash GL
+            # -----------------------------------------------------
+            gl_loan_txn = Transaction(
+                txn_no=f"TXN{uuid.uuid4().hex[:10].upper()}",
+                member_no="M000GL",
+                account_no="M000GL_LOAN",
+                gl_account="LOAN_CONTROL",
+                debit_amount=loan_amount,
+                credit_amount=Decimal("0.00"),
+                running_balance=gl_loan_control.balance +loan_amount,
+                reference=txn_no,
+                narration=f"LOAN_CONTROL disbursement-{member_no}-{loan_no}",
+                bank_txn_date=today,
+                tran_type="LOAN_DISBURSEMENT",
+                posted_by=current_user.username,
+                created_at=today
+            )
+
+            db.session.add(gl_loan_txn)
 
             # ---------------- TOP-UP PROCESS ----------------
             if loan_type == "topup":
