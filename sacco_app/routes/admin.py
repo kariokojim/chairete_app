@@ -7792,3 +7792,246 @@ def activate_committee_member(id):
     flash("Member activated.", "success")
 
     return redirect(url_for('admin.committee_members'))
+
+##  LOAN AND INTEREST PAYMNENT SUMMARY 
+from datetime import date, timedelta
+from decimal import Decimal
+
+from flask import render_template, abort
+from sqlalchemy import text
+
+# Reuse your existing admin_bp and db imports.
+# Example:
+# from app import db
+# from app.admin import admin_bp
+
+
+# ==========================================================
+# SACCO GL ACTIVITY MAPPING
+# ==========================================================
+
+GL_ACTIVITIES = {
+    "loan_disbursed": {
+        "name": "Loan Disbursed",
+        "account_no": "M000GL_LOAN",
+        "column": "debit_amount",
+    },
+    "loan_paid": {
+        "name": "Loan Paid",
+        "account_no": "M000GL_LOAN",
+        "column": "credit_amount",
+    },
+    "member_savings": {
+        "name": "Member Savings",
+        "account_no": "M000GL_SAVINGS",
+        "column": "credit_amount",
+    },
+    "savings_used_for_loan": {
+        "name": "Savings Used to Pay Loan",
+        "account_no": "M000GL_SAVINGS",
+        "column": "debit_amount",
+    },
+    "interest_on_loans": {
+        "name": "Interest on Loans",
+        "account_no": "M000GL_LN_INT",
+        "column": "credit_amount",
+    },
+    "interest_reversed": {
+        "name": "Interest on Loan Reversed",
+        "account_no": "M000GL_LN_INT",
+        "column": "debit_amount",
+    },
+    "registration_fees": {
+        "name": "Registration Fees",
+        "account_no": "M000GL_REG_FEE",
+        "column": "credit_amount",
+    },
+    "registration_fees_reversed": {
+        "name": "Registration Fees Reversed",
+        "account_no": "M000GL_REG_FEE",
+        "column": "debit_amount",
+    },
+}
+
+
+GL_ACCOUNTS = tuple(sorted({
+    activity["account_no"]
+    for activity in GL_ACTIVITIES.values()
+}))
+
+
+# ==========================================================
+# HELPER: DATE RANGE
+# January 1 of current year through today, inclusive.
+# ==========================================================
+
+def get_gl_reporting_dates():
+    today = date.today()
+
+    start_date = date(today.year, 1, 1)
+    end_date = today + timedelta(days=1)
+
+    return start_date, end_date
+
+
+# ==========================================================
+# HELPER: LOAD YEAR-TO-DATE GL TOTALS
+# ==========================================================
+
+def get_gl_ytd_totals(start_date, end_date):
+    sql = text("""
+        SELECT
+            account_no,
+            COALESCE(SUM(debit_amount), 0) AS total_debit,
+            COALESCE(SUM(credit_amount), 0) AS total_credit
+        FROM public.transactions
+        WHERE account_no IN (
+            'M000GL_LOAN',
+            'M000GL_SAVINGS',
+            'M000GL_LN_INT',
+            'M000GL_REG_FEE'
+        )
+        AND tran_type<>'REVERSAL'
+        AND bank_txn_date >= :start_date
+        AND bank_txn_date < :end_date
+        GROUP BY account_no
+    """)
+
+    rows = db.session.execute(
+        sql,
+        {
+            "start_date": start_date,
+            "end_date": end_date,
+        },
+    ).mappings().all()
+
+    totals_by_account = {
+        row["account_no"]: row
+        for row in rows
+    }
+
+    activities = []
+
+    for activity_key, config in GL_ACTIVITIES.items():
+        account_no = config["account_no"]
+        column = config["column"]
+
+        row = totals_by_account.get(account_no)
+
+        if row is None:
+            amount = Decimal("0.00")
+        else:
+            result_column = ( "total_debit" if column == "debit_amount"    else "total_credit")
+
+            amount = Decimal(str(row[result_column] or 0))
+
+        activities.append({
+            "key": activity_key,
+            "name": config["name"],
+            "account_no": account_no,
+            "column": column,
+            "amount": amount,
+        })
+
+    return activities
+
+
+# ==========================================================
+# ROUTE 1: GL ACCOUNT SUMMARY DASHBOARD
+# URL: /gl-account-summary
+# ==========================================================
+
+@admin_bp.route("/gl-account-summary", methods=["GET"])
+@login_required
+def gl_account_summary():
+    start_date, end_date = get_gl_reporting_dates()
+
+    activities = get_gl_ytd_totals(
+        start_date,
+        end_date,
+    )
+
+    return render_template(
+        "admin/gl_account_summary.html",
+        activities=activities,
+        start_date=start_date,
+        end_date=end_date - timedelta(days=1),
+    )
+
+
+# ==========================================================
+# ROUTE 2: MONTHLY ACTIVITY DRILL-DOWN
+# URL: /gl-account-summary/<activity_key>
+# ==========================================================
+@admin_bp.route("/gl-account-summary/<activity_key>", methods=["GET"],)
+@login_required
+def gl_account_monthly(activity_key):
+    config = GL_ACTIVITIES.get(activity_key)
+
+    if config is None:
+        abort(404)
+
+    start_date, end_date = get_gl_reporting_dates()
+
+    sql = text("""
+        SELECT
+            DATE_TRUNC('month', bank_txn_date)::DATE
+                AS txn_month,
+            COALESCE(SUM(debit_amount), 0)
+                AS total_debit,
+            COALESCE(SUM(credit_amount), 0)
+                AS total_credit,
+            COUNT(*) AS transaction_count
+        FROM public.transactions
+        WHERE account_no = :account_no
+        and tran_type <> 'REVERSAL'
+          AND bank_txn_date >= :start_date
+          AND bank_txn_date < :end_date
+        GROUP BY DATE_TRUNC('month', bank_txn_date)
+        ORDER BY txn_month
+    """)
+
+    rows = db.session.execute(
+        sql,
+        {
+            "account_no": config["account_no"],
+            "start_date": start_date,
+            "end_date": end_date,
+        },
+    ).mappings().all()
+
+    monthly_totals = []
+    grand_total = Decimal("0.00")
+
+    for row in rows:
+        debit = Decimal(str(row["total_debit"] or 0))
+        credit = Decimal(str(row["total_credit"] or 0))
+
+        # Select the appropriate transaction direction
+        # according to the activity mapping above.
+        if config["column"] == "debit_amount":
+            activity_amount = debit
+        else:
+            activity_amount = credit
+
+        grand_total += activity_amount
+
+        monthly_totals.append({
+            "txn_month": row["txn_month"],
+            "total_debit": debit,
+            "total_credit": credit,
+            "activity_amount": activity_amount,
+            "transaction_count": row["transaction_count"],
+        })
+
+    return render_template(
+        "admin/gl_account_monthly.html",
+        activity_key=activity_key,
+        activity_name=config["name"],
+        account_no=config["account_no"],
+        selected_column=config["column"],
+        months=monthly_totals,
+        grand_total=grand_total,
+        start_date=start_date,
+        end_date=end_date - timedelta(days=1),
+    )
